@@ -33,6 +33,7 @@ export interface ListSnapshot {
 }
 
 export function dispatch(s: AppState, g: Gesture, index?: number, shown?: ListSnapshot): DispatchResult {
+  if (s.notice) s = { ...s, notice: null };
   if (s.screen === "list") {
     if (!s.sessionsLoaded) return { state: s, effects: [] };
     if (g === "click") {
@@ -59,8 +60,14 @@ export function dispatch(s: AppState, g: Gesture, index?: number, shown?: ListSn
     return { state: s, effects: [] };
   }
   // screen === "session"
+  const activeSessionItem = s.sessions.items.find((x) => x.id === s.sessions.active);
+  const isReadOnly = Boolean(activeSessionItem?.read_only);
+
   if (s.phase === "idle") {
-    if (g === "click") return { state: { ...s, phase: "recording", scrollPage: null }, effects: [{ kind: "startMic" }] };
+    if (g === "click") {
+      if (isReadOnly) return { state: s, effects: [] };
+      return { state: { ...s, phase: "recording", scrollPage: null }, effects: [{ kind: "startMic" }] };
+    }
     if (g === "doubleClick") return { state: { ...s, screen: "list", phase: "idle", pending: null }, effects: [{ kind: "send", frame: sessionsList() }] };
     if (g === "scrollUp") {
       const prev = previousThreadViewportIndex(s.stream, s.scrollPage);

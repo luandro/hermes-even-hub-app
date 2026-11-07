@@ -109,6 +109,20 @@ describe("dispatch: session idle", () => {
     expect(r.state.screen).toBe("list");
     expect(r.effects).toEqual([{ kind: "send", frame: sessionsList() }]);
   });
+  it("ignores click and emits no startMic effect when active session is read_only", () => {
+    const roSession: AppState = {
+      ...session("idle"),
+      sessions: {
+        items: [{ id: "tg-1", title: "🔒 TG", updated: 10, read_only: true }],
+        active: "tg-1",
+      },
+    };
+    const r = dispatch(roSession, "click");
+    expect(r.state.phase).toBe("idle");
+    expect(r.effects).toEqual([]);
+    const r2 = dispatch(roSession, "doubleClick");
+    expect(r2.state.screen).toBe("list");
+  });
 });
 
 describe("dispatch: session recording", () => {

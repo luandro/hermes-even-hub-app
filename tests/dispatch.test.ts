@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { dispatch } from "../src/input/dispatch";
-import { initialState, type AppState } from "../src/state/store";
+import { initialState, reduce, type AppState } from "../src/state/store";
 import { sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../src/protocol";
 import { threadPages } from "../src/ui/stream";
 import { buildListView } from "../src/ui/views";
@@ -72,6 +72,46 @@ describe("dispatch: list", () => {
     const r3 = dispatch(r2.state, "click", 2); // open "b"
     expect(r3.state.sessions.active).toBe("b");
     expect(r3.state.readonlyNoHistory).toBe(false);
+  });
+  it("keeps active id and prevents mic when sessions frame arrives during read-only view", () => {
+    const listState = listWith([
+      { id: "ro", title: "🔒 Telegram session", read_only: true },
+      { id: "owned", title: "Owned session", read_only: false },
+    ]);
+    const r1 = dispatch(listState, "click", 1);
+    expect(r1.state.screen).toBe("session");
+    expect(r1.state.sessions.active).toBe("ro");
+    expect(r1.state.readonlyNoHistory).toBe(true);
+
+    // Dispatch a sessions frame with active=<owned-id> (e.g. after reconnect)
+    const afterReconnect = reduce(r1.state, {
+      t: "sessions",
+      items: [
+        { id: "ro", title: "🔒 Telegram session", read_only: true },
+        { id: "owned", title: "Owned session", read_only: false },
+      ],
+      active: "owned",
+    });
+    expect(afterReconnect.sessions.active).toBe("ro");
+    expect(afterReconnect.readonlyNoHistory).toBe(true);
+
+    // Click on session screen -> must NOT go to recording, no startMic effect
+    const rClick = dispatch(afterReconnect, "click");
+    expect(rClick.state.phase).toBe("idle");
+    expect(rClick.effects).toEqual([]);
+
+    // Back to list, then switch to owned session
+    const rList = dispatch(afterReconnect, "doubleClick");
+    expect(rList.state.screen).toBe("list");
+    const rSwitch = dispatch(rList.state, "click", 2);
+    expect(rSwitch.state.sessions.active).toBe("owned");
+    expect(rSwitch.state.readonlyNoHistory).toBe(false);
+    expect(rSwitch.effects).toEqual([{ kind: "send", frame: sessionsSwitch("owned") }]);
+
+    // Mic is allowed again in the owned session
+    const rMic = dispatch(rSwitch.state, "click");
+    expect(rMic.state.phase).toBe("recording");
+    expect(rMic.effects).toEqual([{ kind: "startMic" }]);
   });
   it("taps on read_only sessions with shown snapshot open locally without switch", () => {
     const s = listWith([

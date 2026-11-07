@@ -40,6 +40,26 @@ describe("reduce: sessions", () => {
     expect(next.sessions.items).toHaveLength(1);
     expect(next.sessions.active).toBe("selected");
   });
+  it("does not let a sessions frame steal active while readonlyNoHistory is true", () => {
+    const s: AppState = {
+      ...initialState(),
+      screen: "session",
+      sessions: {
+        items: [
+          { id: "ro", title: "Read-only", read_only: true },
+          { id: "owned", title: "Owned", read_only: false },
+        ],
+        active: "ro",
+      },
+      readonlyNoHistory: true,
+    };
+    const next = reduce(s, {
+      t: "sessions",
+      items: s.sessions.items,
+      active: "owned",
+    });
+    expect(next.sessions.active).toBe("ro");
+  });
   it("sets active from hello.ok and active messages", () => {
     let s = reduce(initialState(), { t: "hello.ok", caps: {}, active: "x" });
     expect(s.sessions.active).toBe("x");

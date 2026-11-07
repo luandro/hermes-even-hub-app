@@ -75,14 +75,20 @@ function patchTool(stream: StreamItem[], name: string, ok: boolean): StreamItem[
 export function reduce(s: AppState, m: ServerMsg): AppState {
   switch (m.t) {
     case "hello.ok":
-      return { ...s, sessions: { ...s.sessions, active: m.active } };
+      return {
+        ...s,
+        sessions: {
+          ...s.sessions,
+          active: s.readonlyNoHistory ? s.sessions.active : m.active,
+        },
+      };
     case "sessions":
       return {
         ...s,
         sessionsLoaded: true,
         sessions: {
           items: m.items,
-          active: isHistoryLoading(s) ? s.sessions.active : m.active,
+          active: isHistoryLoading(s) || s.readonlyNoHistory ? s.sessions.active : m.active,
         },
       };
     case "active":

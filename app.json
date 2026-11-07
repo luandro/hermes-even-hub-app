@@ -11,8 +11,6 @@
       "name": "network",
       "desc": "Connect to local Hermes bridge",
       "whitelist": [
-        "https://*.ts.net",
-        "wss://*.ts.net",
         "wss://g2-bridge.taile61e1.ts.net",
         "wss://g2-bridge.taile61e1.ts.net:443"
       ]

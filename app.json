@@ -13,12 +13,14 @@
       "whitelist": [
         "https://*.ts.net",
         "wss://*.ts.net",
-        "https://*.tail587d25.ts.net",
-        "wss://*.tail587d25.ts.net",
-        "wss://hunters-mini.tail587d25.ts.net:8443"
+        "wss://g2-bridge.taile61e1.ts.net",
+        "wss://g2-bridge.taile61e1.ts.net:443"
       ]
     },
-    { "name": "g2-microphone", "desc": "Voice input for Hermes agent" }
+    {
+      "name": "g2-microphone",
+      "desc": "Voice input for Hermes agent"
+    }
   ],
   "supported_languages": [
     "en"

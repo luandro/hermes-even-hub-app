@@ -125,4 +125,38 @@ describe("createCapture", () => {
     await capture.stop();
     expect(capture.recording).toBe(false);
   });
+
+  it("audioControl throws on start -> recording false + audio.stop sent", async () => {
+    const bridge = fakeBridge();
+    bridge.audioControl.mockRejectedValueOnce(new Error("mic start failed"));
+    const client = fakeClient();
+    const onError = vi.fn();
+    const capture = createCapture(bridge, client, onError);
+
+    await expect(capture.start()).rejects.toThrow("mic start failed");
+
+    expect(capture.recording).toBe(false);
+    expect(client.send).toHaveBeenCalledWith(audioStart());
+    expect(client.send).toHaveBeenCalledWith(audioStop());
+    expect(onError).toHaveBeenCalled();
+  });
+
+  it("audioControl throws on stop -> audio.stop still sent + recording false", async () => {
+    const bridge = fakeBridge();
+    const client = fakeClient();
+    const onError = vi.fn();
+    const capture = createCapture(bridge, client, onError);
+
+    await capture.start();
+    expect(capture.recording).toBe(true);
+    client.send.mockClear();
+
+    bridge.audioControl.mockRejectedValueOnce(new Error("mic stop failed"));
+
+    await expect(capture.stop()).rejects.toThrow("mic stop failed");
+
+    expect(capture.recording).toBe(false);
+    expect(client.send).toHaveBeenCalledWith(audioStop());
+    expect(onError).toHaveBeenCalled();
+  });
 });

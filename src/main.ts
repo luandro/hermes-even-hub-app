@@ -175,12 +175,30 @@ async function boot(): Promise<void> {
     client.connect(profile);
   }
 
-  const capture = createCapture(bridge, client);
+  const capture = createCapture(bridge, client, (err) => {
+    console.error("[glasses] capture error", err);
+    if (state.phase === "recording") {
+      state = { ...state, phase: "idle" };
+      scheduleRender(state);
+    }
+  });
 
   function runEffect(e: Effect): void {
     if (e.kind === "send") client.send(e.frame);
-    else if (e.kind === "startMic") void capture.start();
-    else if (e.kind === "stopMic") void capture.stop();
+    else if (e.kind === "startMic") {
+      capture.start().catch((err) => {
+        console.error("[glasses] capture start failed", err);
+        if (state.phase === "recording") {
+          state = { ...state, phase: "idle" };
+          scheduleRender(state);
+        }
+      });
+    }
+    else if (e.kind === "stopMic") {
+      capture.stop().catch((err) => {
+        console.error("[glasses] capture stop failed", err);
+      });
+    }
     else if (e.kind === "exit") bridge.shutDownPageContainer(1);
   }
 
@@ -226,7 +244,7 @@ async function boot(): Promise<void> {
     if (torn) return;
     torn = true;
     off();
-    void capture.stop();
+    capture.stop().catch(() => {});
     stopSessionsRetry();
     client.disconnect();
   }

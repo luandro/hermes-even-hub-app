@@ -13,7 +13,13 @@ export interface AudioCapture {
   handleEvent(event: any): void;
 }
 
-export function createCapture(bridge: EvenAppBridge, client: BridgeClient): AudioCapture {
+export type CaptureErrorHandler = (err: unknown) => void;
+
+export function createCapture(
+  bridge: EvenAppBridge,
+  client: BridgeClient,
+  onError?: CaptureErrorHandler,
+): AudioCapture {
   let recording = false;
   return {
     get recording() { return recording; },
@@ -21,13 +27,28 @@ export function createCapture(bridge: EvenAppBridge, client: BridgeClient): Audi
       if (recording) return;
       recording = true;
       client.send(audioStart());
-      await bridge.audioControl(true);
+      try {
+        await bridge.audioControl(true);
+      } catch (err) {
+        recording = false;
+        client.send(audioStop());
+        console.error("[capture] failed to start mic", err);
+        onError?.(err);
+        throw err;
+      }
     },
     async stop() {
       if (!recording) return;
       recording = false;
-      await bridge.audioControl(false);
-      client.send(audioStop());
+      try {
+        await bridge.audioControl(false);
+      } catch (err) {
+        console.error("[capture] failed to stop mic", err);
+        onError?.(err);
+        throw err;
+      } finally {
+        client.send(audioStop());
+      }
     },
     handleEvent(event: any) {
       if (!recording) return;

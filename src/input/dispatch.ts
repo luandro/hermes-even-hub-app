@@ -1,4 +1,4 @@
-import type { AppState } from "../state/store";
+import type { AppState, StreamItem } from "../state/store";
 import { sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../protocol";
 import { sessionForListIndex } from "../ui/session-list";
 import { nextThreadViewportCursor, previousThreadViewportIndex } from "../ui/stream";
@@ -12,6 +12,13 @@ export type Effect =
   | { kind: "exit" };
 
 export interface DispatchResult { state: AppState; effects: Effect[]; }
+
+export function generateTurnId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `turn-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 const enterSession = (s: AppState, active: string | null): AppState => ({
   ...s, screen: "session", phase: "idle", stream: [], pending: null, turn: "idle",
@@ -32,7 +39,13 @@ export interface ListSnapshot {
   ids: (string | null)[];
 }
 
-export function dispatch(s: AppState, g: Gesture, index?: number, shown?: ListSnapshot): DispatchResult {
+export function dispatch(
+  s: AppState,
+  g: Gesture,
+  index?: number,
+  shown?: ListSnapshot,
+  idGenerator: () => string = generateTurnId,
+): DispatchResult {
   if (s.notice) s = { ...s, notice: null };
   if (s.screen === "list") {
     if (!s.sessionsLoaded) return { state: s, effects: [] };
@@ -66,6 +79,17 @@ export function dispatch(s: AppState, g: Gesture, index?: number, shown?: ListSn
   if (s.phase === "idle") {
     if (g === "click") {
       if (isReadOnly) return { state: s, effects: [] };
+      const lastItem = s.stream[s.stream.length - 1];
+      if (lastItem && lastItem.kind === "user" && lastItem.delivery === "uncertain") {
+        const updatedStream: StreamItem[] = [
+          ...s.stream.slice(0, -1),
+          { ...lastItem, delivery: "pending" },
+        ];
+        return {
+          state: { ...s, stream: updatedStream, turn: "thinking", scrollPage: null },
+          effects: [{ kind: "send", frame: textMsg(lastItem.text, lastItem.id) }],
+        };
+      }
       return { state: { ...s, phase: "recording", scrollPage: null }, effects: [{ kind: "startMic" }] };
     }
     if (g === "doubleClick") return { state: { ...s, screen: "list", phase: "idle", pending: null }, effects: [{ kind: "send", frame: sessionsList() }] };
@@ -91,9 +115,17 @@ export function dispatch(s: AppState, g: Gesture, index?: number, shown?: ListSn
   if (s.phase === "review") {
     if (g === "click" && s.pending) {
       const text = s.pending.transcript;
+      const id = idGenerator();
       return {
-        state: { ...s, stream: [...s.stream, { kind: "user", text }], pending: null, phase: "idle", turn: "thinking", scrollPage: null },
-        effects: [{ kind: "send", frame: textMsg(text) }],
+        state: {
+          ...s,
+          stream: [...s.stream, { kind: "user", text, id, delivery: "pending" }],
+          pending: null,
+          phase: "idle",
+          turn: "thinking",
+          scrollPage: null,
+        },
+        effects: [{ kind: "send", frame: textMsg(text, id) }],
       };
     }
     if (g === "scrollDown") return { state: { ...s, pending: null, phase: "idle" }, effects: [] };

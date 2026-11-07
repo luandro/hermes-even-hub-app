@@ -57,4 +57,15 @@ describe("protocol", () => {
     const parsed = parseServer(raw);
     expect(parsed).toEqual({ t: "notice", text: "Some replies were lost while the glasses were offline." });
   });
+  it("builds a text frame with optional id", async () => {
+    const { textMsg } = await import("../src/protocol");
+    expect(JSON.parse(textMsg("hello"))).toEqual({ t: "text", text: "hello" });
+    expect(JSON.parse(textMsg("hello", "tx-123"))).toEqual({ t: "text", text: "hello", id: "tx-123" });
+  });
+  it("parses an ack frame", () => {
+    const rawOk = JSON.stringify({ t: "ack", id: "msg-1", ok: true });
+    expect(parseServer(rawOk)).toEqual({ t: "ack", id: "msg-1", ok: true });
+    const rawErr = JSON.stringify({ t: "ack", id: "msg-2", ok: false, error: "turn failed" });
+    expect(parseServer(rawErr)).toEqual({ t: "ack", id: "msg-2", ok: false, error: "turn failed" });
+  });
 });

@@ -69,7 +69,12 @@ describe("BridgeClient", () => {
 
   it("disconnect() stops reconnect after the socket closes", () => {
     vi.useFakeTimers();
-    const c = new BridgeClient({ WS: FakeWS as any, onMessage: () => {} });
+    let disconnectedCalled = false;
+    const c = new BridgeClient({
+      WS: FakeWS as any,
+      onMessage: () => {},
+      onDisconnected: () => { disconnectedCalled = true; },
+    });
     c.connect(profile);
     FakeWS.last!.onopen!();
 
@@ -77,8 +82,24 @@ describe("BridgeClient", () => {
     vi.runOnlyPendingTimers();
 
     expect(FakeWS.opened).toHaveLength(1);
+    expect(disconnectedCalled).toBe(true);
     vi.useRealTimers();
   });
+
+  it("calls onDisconnected when websocket closes unexpectedly", () => {
+    let disconnectedCalled = false;
+    const c = new BridgeClient({
+      WS: FakeWS as any,
+      onMessage: () => {},
+      onDisconnected: () => { disconnectedCalled = true; },
+    });
+    c.connect(profile);
+    FakeWS.last!.onopen!();
+
+    FakeWS.last!.close(1006, "abnormal closure");
+    expect(disconnectedCalled).toBe(true);
+  });
+
 
   it("stops reconnecting when the bridge rejects the token", () => {
     vi.useFakeTimers();

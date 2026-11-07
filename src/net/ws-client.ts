@@ -5,6 +5,7 @@ interface Deps {
   WS?: typeof WebSocket;
   onMessage: (m: ServerMsg) => void;
   onStatus?: (s: string) => void;
+  onDisconnected?: () => void;
 }
 
 export class BridgeClient {
@@ -42,6 +43,7 @@ export class BridgeClient {
     this.ws = undefined;
     if (ws && (ws as any).readyState !== 3) (ws as any).close();
     this.d.onStatus?.(status);
+    this.d.onDisconnected?.();
   }
 
   send(raw: string): void {
@@ -81,6 +83,7 @@ export class BridgeClient {
     (ws as any).onclose = (event?: { code?: number; reason?: string }) => {
       this.clearTimers();
       if (this.ws === ws) this.ws = undefined;
+      this.d.onDisconnected?.();
       if (!this.alive) return;
       if (isAuthClose(event)) {
         this.alive = false;

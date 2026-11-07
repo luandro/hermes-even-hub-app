@@ -2,7 +2,7 @@ import { waitForEvenAppBridge, OsEventTypeList } from "@evenrealities/even_hub_s
 import "./style.css";
 import { loadBridgeDefaults } from "./config";
 import { BridgeClient } from "./net/ws-client";
-import { initialState, reduce, type AppState } from "./state/store";
+import { initialState, reduce, markDeliveryUncertain, type AppState } from "./state/store";
 import { createLoadingStartup, createSetupStartup, showListPage, showLoadingPage, showSessionPage } from "./ui/render";
 import { loadingText, renderSession, buildListView, type ListView } from "./ui/views";
 import { renderPhoneSetup } from "./ui/phone";
@@ -48,12 +48,54 @@ async function boot(): Promise<void> {
   let helloOk = false;
   let sessionsRetryTimer: ReturnType<typeof setInterval> | undefined;
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  const deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const clearNoticeTimer = (): void => {
     if (noticeTimer) {
       clearTimeout(noticeTimer);
       noticeTimer = undefined;
     }
+  };
+
+  const armNoticeTimer = (): void => {
+    clearNoticeTimer();
+    noticeTimer = setTimeout(() => {
+      noticeTimer = undefined;
+      if (state.notice) {
+        state = { ...state, notice: null };
+        scheduleRender(state);
+      }
+    }, 8000);
+  };
+
+  const armDeliveryTimer = (id: string): void => {
+    const existing = deliveryTimers.get(id);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      deliveryTimers.delete(id);
+      const prev = state;
+      state = markDeliveryUncertain(state, id);
+      if (state !== prev) {
+        scheduleRender(state);
+        armNoticeTimer();
+      }
+    }, 8000);
+    deliveryTimers.set(id, timer);
+  };
+
+  const clearDeliveryTimer = (id: string): void => {
+    const timer = deliveryTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      deliveryTimers.delete(id);
+    }
+  };
+
+  const clearAllDeliveryTimers = (): void => {
+    for (const timer of deliveryTimers.values()) {
+      clearTimeout(timer);
+    }
+    deliveryTimers.clear();
   };
 
   if (glassesView === "list") {
@@ -140,6 +182,10 @@ async function boot(): Promise<void> {
     onMessage: (m) => {
       state = reduce(state, m);
       scheduleRender(state);
+      if (m.t === "ack") {
+        clearDeliveryTimer(m.id);
+        if (!m.ok) armNoticeTimer();
+      }
       if (m.t === "hello.ok") {
         helloOk = true;
         client.send(sessionsList());
@@ -149,17 +195,19 @@ async function boot(): Promise<void> {
       if (m.t === "sessions") stopSessionsRetry();
       if (m.t === "active") persistActiveSession(m.id);
       if (m.t === "notice") {
-        clearNoticeTimer();
-        noticeTimer = setTimeout(() => {
-          noticeTimer = undefined;
-          if (state.notice) {
-            state = { ...state, notice: null };
-            scheduleRender(state);
-          }
-        }, 8000);
+        armNoticeTimer();
       }
     },
     onStatus: setStatus,
+    onDisconnected: () => {
+      clearAllDeliveryTimers();
+      const prev = state;
+      state = markDeliveryUncertain(state);
+      if (state !== prev) {
+        scheduleRender(state);
+        armNoticeTimer();
+      }
+    },
   });
 
   async function saveAndConnect(url: string, token: string): Promise<void> {
@@ -202,7 +250,15 @@ async function boot(): Promise<void> {
   });
 
   function runEffect(e: Effect): void {
-    if (e.kind === "send") client.send(e.frame);
+    if (e.kind === "send") {
+      client.send(e.frame);
+      try {
+        const parsed = JSON.parse(e.frame);
+        if (parsed.t === "text" && typeof parsed.id === "string") {
+          armDeliveryTimer(parsed.id);
+        }
+      } catch {}
+    }
     else if (e.kind === "startMic") {
       capture.start().catch((err) => {
         console.error("[glasses] capture start failed", err);

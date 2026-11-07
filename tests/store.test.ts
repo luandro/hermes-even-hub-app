@@ -256,6 +256,74 @@ describe("connDot", () => {
   });
 });
 
+describe("ack and delivery status", () => {
+  it("ack with ok=true sets delivery to delivered", () => {
+    const s: AppState = {
+      ...initialState(),
+      turn: "thinking",
+      stream: [{ kind: "user", text: "do something", id: "turn-1", delivery: "pending" }],
+    };
+    const next = reduce(s, { t: "ack", id: "turn-1", ok: true } as any);
+    expect(next.stream[0]).toEqual({
+      kind: "user",
+      text: "do something",
+      id: "turn-1",
+      delivery: "delivered",
+    });
+    expect(next.turn).toBe("thinking");
+  });
+
+  it("ack with ok=false sets delivery to uncertain, turn to idle, and surfaces status text", () => {
+    const s: AppState = {
+      ...initialState(),
+      turn: "thinking",
+      stream: [{ kind: "user", text: "do something", id: "turn-1", delivery: "pending" }],
+    };
+    const next = reduce(s, { t: "ack", id: "turn-1", ok: false, error: "failed" } as any);
+    expect(next.stream[0]).toEqual({
+      kind: "user",
+      text: "do something",
+      id: "turn-1",
+      delivery: "uncertain",
+    });
+    expect(next.turn).toBe("idle");
+    expect(next.notice).toBe("Delivery not confirmed — check bridge connection");
+    expect(barText(next)).toBe("Delivery not confirmed — check bridge connection");
+  });
+
+  it("markDeliveryUncertain flips pending user turns to uncertain and sets notice", async () => {
+    const { markDeliveryUncertain } = await import("../src/state/store");
+    const s: AppState = {
+      ...initialState(),
+      turn: "thinking",
+      stream: [
+        { kind: "user", text: "first", id: "t1", delivery: "delivered" },
+        { kind: "user", text: "second", id: "t2", delivery: "pending" },
+      ],
+    };
+    const next = markDeliveryUncertain(s, "t2");
+    expect(next.stream[1]).toEqual({
+      kind: "user",
+      text: "second",
+      id: "t2",
+      delivery: "uncertain",
+    });
+    expect(next.turn).toBe("idle");
+    expect(next.notice).toBe("Delivery not confirmed — check bridge connection");
+
+    // Without id, marks any pending delivery
+    const sAll: AppState = {
+      ...initialState(),
+      turn: "thinking",
+      stream: [{ kind: "user", text: "second", id: "t3", delivery: "pending" }],
+    };
+    const nextAll = markDeliveryUncertain(sAll);
+    expect(nextAll.stream[0].delivery).toBe("uncertain");
+    expect(nextAll.turn).toBe("idle");
+    expect(nextAll.notice).toBe("Delivery not confirmed — check bridge connection");
+  });
+});
+
 describe("glyphs the firmware can actually render", () => {
   // Unknown glyphs are dropped SILENTLY — no error, no placeholder, just a gap.
   // The mic emoji in the recording bar rendered as nothing at all.

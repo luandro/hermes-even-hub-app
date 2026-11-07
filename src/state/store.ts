@@ -121,6 +121,18 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
       return { ...s, turn: "idle" };
     case "notice":
       return { ...s, notice: m.text };
+    case "ack":
+      if (m.ok) {
+        return {
+          ...s,
+          stream: s.stream.map((item) =>
+            item.kind === "user" && item.id === m.id
+              ? { ...item, delivery: "delivered" }
+              : item
+          ),
+        };
+      }
+      return markDeliveryUncertain(s, m.id);
     case "transcript":
       if (s.phase !== "transcribing") return s;
       return m.text.trim()
@@ -166,4 +178,22 @@ export function isHistoryLoading(s: AppState): boolean {
 
 export function isHistoryUnavailable(s: AppState): boolean {
   return Boolean(s.sessions.active && s.history.failedFor === s.sessions.active);
+}
+
+export function markDeliveryUncertain(s: AppState, id?: string): AppState {
+  let changed = false;
+  const stream = s.stream.map((item) => {
+    if (item.kind === "user" && item.delivery === "pending" && (!id || item.id === id)) {
+      changed = true;
+      return { ...item, delivery: "uncertain" as const };
+    }
+    return item;
+  });
+  if (!changed) return s;
+  return {
+    ...s,
+    stream,
+    turn: "idle",
+    notice: "Delivery not confirmed — check bridge connection",
+  };
 }

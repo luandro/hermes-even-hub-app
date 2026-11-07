@@ -143,13 +143,31 @@ function review(transcript: string): AppState {
 }
 
 describe("dispatch: session review", () => {
-  it("tap sends: pushes a user item, clears pending, thinks", () => {
-    const r = dispatch(review("add dark mode"), "click");
-    expect(r.state.stream).toEqual([{ kind: "user", text: "add dark mode" }]);
+  it("tap sends: pushes a user item with id and pending delivery, clears pending, thinks", () => {
+    const r = dispatch(review("add dark mode"), "click", undefined, undefined, () => "turn-123");
+    expect(r.state.stream).toEqual([
+      { kind: "user", text: "add dark mode", id: "turn-123", delivery: "pending" },
+    ]);
     expect(r.state.pending).toBeNull();
     expect(r.state.phase).toBe("idle");
     expect(r.state.turn).toBe("thinking");
-    expect(r.effects).toEqual([{ kind: "send", frame: textMsg("add dark mode") }]);
+    expect(r.effects).toEqual([{ kind: "send", frame: textMsg("add dark mode", "turn-123") }]);
+  });
+  it("resends the same instruction with same id when idle and last instruction delivery is uncertain", () => {
+    const s: AppState = {
+      ...initialState(),
+      screen: "session",
+      phase: "idle",
+      turn: "idle",
+      stream: [{ kind: "user", text: "retry this", id: "turn-retry", delivery: "uncertain" }],
+    };
+    const r = dispatch(s, "click");
+    expect(r.state.phase).toBe("idle");
+    expect(r.state.turn).toBe("thinking");
+    expect(r.state.stream).toEqual([
+      { kind: "user", text: "retry this", id: "turn-retry", delivery: "pending" },
+    ]);
+    expect(r.effects).toEqual([{ kind: "send", frame: textMsg("retry this", "turn-retry") }]);
   });
   it("swipe-down redoes: clears pending, no send, stream untouched", () => {
     const r = dispatch(review("oops"), "scrollDown");

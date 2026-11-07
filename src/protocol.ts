@@ -9,7 +9,7 @@ export interface SessionItem {
 }
 
 export type HistoryItem =
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; id?: string; delivery?: "pending" | "delivered" | "uncertain" }
   | { kind: "tool"; name: string; label?: string; running: boolean; ok?: boolean }
   | { kind: "assistant"; text: string }
   | { kind: "banner"; text: string };
@@ -26,6 +26,7 @@ export type ServerMsg =
   | { t: "tool.end"; name: string; ok: boolean }
   | { t: "turn.done" }
   | { t: "notice"; text: string }
+  | { t: "ack"; id: string; ok: boolean; error?: string }
   | { t: "error"; msg: string };
 
 const SERVER_TYPES = new Set([
@@ -40,6 +41,7 @@ const SERVER_TYPES = new Set([
   "tool.end",
   "turn.done",
   "notice",
+  "ack",
   "error",
 ]);
 
@@ -54,7 +56,8 @@ export const sessionsSwitch = (id: string) =>
 export const sessionsNew = (title?: string) =>
   JSON.stringify({ t: "sessions.new", title });
 
-export const textMsg = (text: string) => JSON.stringify({ t: "text", text });
+export const textMsg = (text: string, id?: string) =>
+  JSON.stringify(id ? { t: "text", text, id } : { t: "text", text });
 
 export const stopMsg = () => JSON.stringify({ t: "stop" });
 

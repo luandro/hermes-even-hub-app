@@ -18,6 +18,7 @@ export interface AppState {
   turn: Turn;
   scrollPage: number | null; // null = follow latest viewport; number = measured viewport index (held)
   notice: string | null;
+  readonlyNoHistory?: boolean;
 }
 
 export function initialState(): AppState {
@@ -33,6 +34,7 @@ export function initialState(): AppState {
     turn: "idle",
     scrollPage: null,
     notice: null,
+    readonlyNoHistory: false,
   };
 }
 
@@ -88,6 +90,7 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
         ...s,
         sessions: { ...s.sessions, active: m.id },
         history: { loadingFor: m.id, failedFor: null },
+        readonlyNoHistory: false,
       };
     case "history":
       if (m.id !== s.sessions.active && m.id !== s.history.loadingFor) return s;
@@ -95,6 +98,7 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
         ...s,
         sessions: { ...s.sessions, active: m.id },
         history: { loadingFor: null, failedFor: m.ok === false ? m.id : null },
+        readonlyNoHistory: false,
         stream: m.items,
         pending: null,
         phase: "idle",
@@ -154,6 +158,7 @@ export function barText(s: AppState): string {
     case "idle":
     default: {
       if (s.notice) return s.notice;
+      if (s.readonlyNoHistory) return "History not shown (Telegram-owned session, read-only)";
       if (isHistoryLoading(s)) return "loading session...";
       if (isHistoryUnavailable(s)) return "history unavailable";
       if (s.turn === "working") {

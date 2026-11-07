@@ -128,6 +128,20 @@ describe("renderSession", () => {
     expect(calls[2]).toBe("tap to speak");
     expect(calls[3]).toBe("history unavailable");
   });
+  it("renders honest banner instead of tap to speak for readonly session without history", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    const s: AppState = {
+      ...initialState(), screen: "session", phase: "idle", conn: "connected",
+      sessions: { items: [{ id: "tg-1", title: "🔒 TG", updated: 0, read_only: true }], active: "tg-1" },
+      history: { loadingFor: null, failedFor: null },
+      readonlyNoHistory: true,
+      stream: [],
+    };
+    await renderSession(bridge, s);
+    expect(calls[2]).toBe("");
+    expect(calls[3]).toBe("History not shown (Telegram-owned session, read-only)");
+  });
   it("shows the pending transcript as the next user line during review", async () => {
     const calls: Record<number, string> = {};
     const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;

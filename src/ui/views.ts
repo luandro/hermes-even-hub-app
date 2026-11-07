@@ -63,7 +63,7 @@ export async function renderSession(bridge: EvenAppBridge, s: AppState): Promise
   const body = isHistoryLoading(s)
     ? "loading session..."
     : displayThreadItems(s).length === 0
-      ? "tap to speak"
+      ? (s.readonlyNoHistory ? "" : "tap to speak")
       : threadViewportText(s);
   await setText(bridge, IDS.body, body);
 

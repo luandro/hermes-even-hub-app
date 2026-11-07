@@ -25,6 +25,7 @@ const enterSession = (s: AppState, active: string | null): AppState => ({
   scrollPage: null,
   history: { loadingFor: active, failedFor: null },
   sessions: { ...s.sessions, active },
+  readonlyNoHistory: false,
 });
 
 /**
@@ -63,6 +64,7 @@ export function dispatch(
             ...enterSession(s, id),
             history: { loadingFor: null, failedFor: null },
             stream: s.sessions.active === id ? s.stream : [],
+            readonlyNoHistory: true,
           },
           effects: [],
         };

@@ -52,7 +52,7 @@ describe("dispatch: list", () => {
     expect(r.state.sessions.active).toBe("middle");
     expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("middle") }]);
   });
-  it("taps on read_only sessions open them locally without sending sessions.switch", () => {
+  it("taps on read_only sessions open them locally without sending sessions.switch and set readonlyNoHistory banner flag", () => {
     const r = dispatch(
       listWith([
         { id: "ro", title: "🔒 Telegram session", read_only: true },
@@ -63,7 +63,15 @@ describe("dispatch: list", () => {
     );
     expect(r.state.screen).toBe("session");
     expect(r.state.sessions.active).toBe("ro");
+    expect(r.state.readonlyNoHistory).toBe(true);
     expect(r.effects).toEqual([]);
+
+    // Switching to an owned session clears readonlyNoHistory
+    const r2 = dispatch(r.state, "doubleClick"); // back to list
+    expect(r2.state.screen).toBe("list");
+    const r3 = dispatch(r2.state, "click", 2); // open "b"
+    expect(r3.state.sessions.active).toBe("b");
+    expect(r3.state.readonlyNoHistory).toBe(false);
   });
   it("taps on read_only sessions with shown snapshot open locally without switch", () => {
     const s = listWith([
@@ -74,6 +82,7 @@ describe("dispatch: list", () => {
     const r = dispatch(s, "click", 1, shown);
     expect(r.state.screen).toBe("session");
     expect(r.state.sessions.active).toBe("ro");
+    expect(r.state.readonlyNoHistory).toBe(true);
     expect(r.effects).toEqual([]);
   });
   it("double-press exits the app", () => {

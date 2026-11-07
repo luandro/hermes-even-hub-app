@@ -247,6 +247,10 @@ describe("barText", () => {
     const s = reduce(base, { t: "notice", text: "Some replies were lost while the glasses were offline." } as any);
     expect(barText(s)).toBe("Some replies were lost while the glasses were offline.");
   });
+  it("surfaces honest banner for readonly session without history", () => {
+    const s = { ...base, phase: "idle" as const, readonlyNoHistory: true };
+    expect(barText(s)).toBe("History not shown (Telegram-owned session, read-only)");
+  });
 });
 
 describe("connDot", () => {

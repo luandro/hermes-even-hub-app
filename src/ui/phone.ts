@@ -21,7 +21,7 @@ export function renderPhoneSetup(
   const shell = el("main", "setup-shell");
   const panel = el("section", "setup-panel");
   const form = el("form", "setup-form");
-  const url = input("url", "Bridge URL", state.profile?.url || state.defaults.url, "wss://node.tailnet.ts.net:8443");
+  const url = input("url", "Bridge URL", state.profile?.url || state.defaults.url, "wss://g2-bridge.taile61e1.ts.net");
   const token = input("password", "Bridge token", state.profile?.token || state.defaults.token, "Shared bridge token");
   const header = el("header", "setup-header");
   const status = el("p", `setup-status ${statusClass(state.status)}`, statusText(state.status));
@@ -58,8 +58,8 @@ function helpBlock(): HTMLElement {
   const body = el("div", "setup-help-body");
   body.append(
     el("p", "", "Expose the local bridge with Tailscale Serve, then enter the WSS URL and token above."),
-    code("tailscale serve --https=8443 --bg http://localhost:8765"),
-    code("wss://<node>.<tailnet>.ts.net:8443"),
+    code("tailscale serve --https=443 --bg http://localhost:8765"),
+    code("wss://g2-bridge.taile61e1.ts.net"),
   );
   block.addEventListener("toggle", () => {
     action.textContent = block.open ? "Hide" : "Show";

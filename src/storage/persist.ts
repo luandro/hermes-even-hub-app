@@ -49,6 +49,10 @@ export function validateConnectionProfile(profile: Pick<ConnectionProfile, "url"
   return { valid: errors.length === 0, errors };
 }
 
+export function isConfiguredProfile(profile: ConnectionProfile | null | undefined): profile is ConnectionProfile {
+  return Boolean(profile && profile.token.trim() && validateConnectionProfile(profile).valid);
+}
+
 export async function saveConnectionProfile(
   bridge: EvenAppBridge,
   profile: ConnectionProfile,

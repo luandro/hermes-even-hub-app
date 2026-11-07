@@ -9,6 +9,6 @@ export function loadBridgeDefaults(): BridgeDefaults {
       ?? import.meta.env.VITE_BRIDGE_LAN_URL
       ?? import.meta.env.VITE_BRIDGE_REMOTE_URL
       ?? "",
-    token: import.meta.env.VITE_BRIDGE_TOKEN ?? "",
+    token: "",
   };
 }

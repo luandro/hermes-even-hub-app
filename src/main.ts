@@ -12,6 +12,7 @@ import { sessionsList } from "./protocol";
 import { serializeLatest } from "./util/coalesce";
 import { createCapture } from "./audio/capture";
 import {
+  isConfiguredProfile,
   loadConnectionProfile,
   saveConnectionProfile,
   updateActiveSession,
@@ -254,7 +255,7 @@ async function boot(): Promise<void> {
 }
 
 function profileIsReady(profile: ConnectionProfile | null): profile is ConnectionProfile {
-  return !!profile && validateConnectionProfile(profile).valid;
+  return isConfiguredProfile(profile);
 }
 
 boot().catch((err) => console.error("[glasses] boot failed", err));

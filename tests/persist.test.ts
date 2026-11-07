@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  isConfiguredProfile,
   loadConnectionProfile,
   saveConnectionProfile,
   updateActiveSession,
   validateConnectionProfile,
   type ConnectionProfile,
 } from "../src/storage/persist";
+import { loadBridgeDefaults } from "../src/config";
 import type { EvenAppBridge } from "@evenrealities/even_hub_sdk";
 
 function makeBridge(stored: Record<string, string> = {}): EvenAppBridge {
@@ -110,5 +112,26 @@ describe("connection profile validation", () => {
       "Bridge URL must start with wss:// or ws://.",
       "Bridge token is required.",
     ]);
+  });
+
+  it("rejects whitespace-only tokens", () => {
+    const result = validateConnectionProfile({ url: "wss://node.tailnet.ts.net:8443", token: "   " });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("Bridge token is required.");
+  });
+
+  it("identifies ready profiles and treats empty-token profiles as needing setup", () => {
+    expect(isConfiguredProfile(null)).toBe(false);
+    expect(isConfiguredProfile(undefined)).toBe(false);
+    expect(isConfiguredProfile({ url: "wss://node.tailnet.ts.net:8443", token: "", updatedAt: 1 })).toBe(false);
+    expect(isConfiguredProfile({ url: "wss://node.tailnet.ts.net:8443", token: "   ", updatedAt: 1 })).toBe(false);
+    expect(isConfiguredProfile({ url: "wss://node.tailnet.ts.net:8443", token: "valid-token", updatedAt: 1 })).toBe(true);
+  });
+});
+
+describe("bridge defaults", () => {
+  it("never bakes in a token default", () => {
+    const defaults = loadBridgeDefaults();
+    expect(defaults.token).toBe("");
   });
 });

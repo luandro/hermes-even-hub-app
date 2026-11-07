@@ -243,6 +243,10 @@ describe("barText", () => {
       stream: [{ kind: "tool" as const, name: "terminal", running: true }] };
     expect(barText(s)).toBe("working… (terminal)");
   });
+  it("surfaces notice frame in barText when idle", () => {
+    const s = reduce(base, { t: "notice", text: "Some replies were lost while the glasses were offline." } as any);
+    expect(barText(s)).toBe("Some replies were lost while the glasses were offline.");
+  });
 });
 
 describe("connDot", () => {

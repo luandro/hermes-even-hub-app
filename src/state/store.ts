@@ -17,6 +17,7 @@ export interface AppState {
   pending: { transcript: string } | null;
   turn: Turn;
   scrollPage: number | null; // null = follow latest viewport; number = measured viewport index (held)
+  notice: string | null;
 }
 
 export function initialState(): AppState {
@@ -31,6 +32,7 @@ export function initialState(): AppState {
     pending: null,
     turn: "idle",
     scrollPage: null,
+    notice: null,
   };
 }
 
@@ -117,6 +119,8 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
       return { ...s, stream: patchTool(s.stream, m.name, m.ok) };
     case "turn.done":
       return { ...s, turn: "idle" };
+    case "notice":
+      return { ...s, notice: m.text };
     case "transcript":
       if (s.phase !== "transcribing") return s;
       return m.text.trim()
@@ -137,6 +141,7 @@ export function barText(s: AppState): string {
     case "review": return "tap = send · swipe↓ = redo";
     case "idle":
     default: {
+      if (s.notice) return s.notice;
       if (isHistoryLoading(s)) return "loading session...";
       if (isHistoryUnavailable(s)) return "history unavailable";
       if (s.turn === "working") {

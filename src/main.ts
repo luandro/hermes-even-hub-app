@@ -47,6 +47,14 @@ async function boot(): Promise<void> {
   let listRendered = false;
   let helloOk = false;
   let sessionsRetryTimer: ReturnType<typeof setInterval> | undefined;
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearNoticeTimer = (): void => {
+    if (noticeTimer) {
+      clearTimeout(noticeTimer);
+      noticeTimer = undefined;
+    }
+  };
 
   if (glassesView === "list") {
     await createLoadingStartup(bridge);
@@ -140,6 +148,16 @@ async function boot(): Promise<void> {
       }
       if (m.t === "sessions") stopSessionsRetry();
       if (m.t === "active") persistActiveSession(m.id);
+      if (m.t === "notice") {
+        clearNoticeTimer();
+        noticeTimer = setTimeout(() => {
+          noticeTimer = undefined;
+          if (state.notice) {
+            state = { ...state, notice: null };
+            scheduleRender(state);
+          }
+        }, 8000);
+      }
     },
     onStatus: setStatus,
   });
@@ -212,6 +230,7 @@ async function boot(): Promise<void> {
   }
 
   async function applyGesture(g: Gesture, index?: number): Promise<void> {
+    clearNoticeTimer();
     if (glassesView === "setup") {
       if (g === "doubleClick") bridge.shutDownPageContainer(1);
       return;
@@ -243,6 +262,7 @@ async function boot(): Promise<void> {
   function teardown(): void {
     if (torn) return;
     torn = true;
+    clearNoticeTimer();
     off();
     capture.stop().catch(() => {});
     stopSessionsRetry();

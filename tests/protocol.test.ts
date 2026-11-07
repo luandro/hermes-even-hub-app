@@ -52,4 +52,9 @@ describe("protocol", () => {
       ],
     });
   });
+  it("parses a notice frame", () => {
+    const raw = JSON.stringify({ t: "notice", text: "Some replies were lost while the glasses were offline." });
+    const parsed = parseServer(raw);
+    expect(parsed).toEqual({ t: "notice", text: "Some replies were lost while the glasses were offline." });
+  });
 });

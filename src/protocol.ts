@@ -25,6 +25,7 @@ export type ServerMsg =
   | { t: "tool.start"; name: string; label?: string; emoji?: string }
   | { t: "tool.end"; name: string; ok: boolean }
   | { t: "turn.done" }
+  | { t: "notice"; text: string }
   | { t: "error"; msg: string };
 
 const SERVER_TYPES = new Set([
@@ -38,6 +39,7 @@ const SERVER_TYPES = new Set([
   "tool.start",
   "tool.end",
   "turn.done",
+  "notice",
   "error",
 ]);
 

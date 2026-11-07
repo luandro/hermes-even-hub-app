@@ -53,11 +53,23 @@ export function isConfiguredProfile(profile: ConnectionProfile | null | undefine
   return Boolean(profile && profile.token.trim() && validateConnectionProfile(profile).valid);
 }
 
+export const WHITELISTED_BRIDGE_HOST = "g2-bridge.taile61e1.ts.net";
+
 export async function saveConnectionProfile(
   bridge: EvenAppBridge,
   profile: ConnectionProfile,
 ): Promise<ConnectionProfile> {
   const next = normalizeConnectionProfile(profile);
+  try {
+    const parsed = new URL(next.url);
+    if (parsed.hostname !== WHITELISTED_BRIDGE_HOST) {
+      console.warn(
+        `Bridge URL host '${parsed.hostname}' is not in the whitelist set (${WHITELISTED_BRIDGE_HOST}).`,
+      );
+    }
+  } catch {
+    // Leave invalid URL reporting to profile validation
+  }
   await bridge.setLocalStorage(KEYS.profile, JSON.stringify(next));
   return next;
 }

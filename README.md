@@ -30,16 +30,18 @@ G2 glasses (576×288 + mic)
    `~/.hermes/.env`, enable it, restart the gateway.
 2. **Expose the local bridge with Tailscale Serve**:
    ```bash
-   tailscale serve --https=8443 --bg http://localhost:8765
+   tailscale serve --https=443 --bg http://localhost:8765
    ```
 3. **Install or sideload this app**, then open its phone companion surface in Even Hub.
    Enter:
    ```
-   wss://<node>.<tailnet>.ts.net:8443
+   wss://g2-bridge.taile61e1.ts.net
    <same shared bridge token>
    ```
    The app stores that profile at runtime with the Even SDK storage API. No token is required
    in the build.
+
+To produce a release artifact with a prefilled setup URL, build with `VITE_BRIDGE_URL=wss://g2-bridge.taile61e1.ts.net:443`.
 
 Optional developer defaults can be set in `.env.local` to prefill the phone setup form during
 local testing, but runtime entry remains the production path.

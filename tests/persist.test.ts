@@ -19,6 +19,36 @@ function makeBridge(stored: Record<string, string> = {}): EvenAppBridge {
 }
 
 describe("connection profile persistence", () => {
+  it("warns when saving profile with URL host outside whitelist set", async () => {
+    const bridge = makeBridge();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const profile: ConnectionProfile = {
+      url: "wss://untrusted.host.com:443",
+      token: "tok",
+      updatedAt: 1,
+    };
+    const saved = await saveConnectionProfile(bridge, profile);
+    expect(saved.url).toBe("wss://untrusted.host.com:443");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("g2-bridge.taile61e1.ts.net"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("does not warn when saving profile with whitelisted URL host", async () => {
+    const bridge = makeBridge();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const profile: ConnectionProfile = {
+      url: "wss://g2-bridge.taile61e1.ts.net:443",
+      token: "tok",
+      updatedAt: 1,
+    };
+    const saved = await saveConnectionProfile(bridge, profile);
+    expect(saved.url).toBe("wss://g2-bridge.taile61e1.ts.net:443");
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it("saves the runtime profile as JSON under the v1 key", async () => {
     const bridge = makeBridge();
     const profile: ConnectionProfile = {

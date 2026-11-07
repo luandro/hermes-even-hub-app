@@ -42,6 +42,17 @@ export function dispatch(s: AppState, g: Gesture, index?: number, shown?: ListSn
       // callers keep their current behaviour.
       const id = shown ? shown.ids[i] ?? null : sessionForListIndex(s.sessions.items, i)?.id ?? null;
       if (!id) return { state: s, effects: [] };
+      const item = s.sessions.items.find((x) => x.id === id);
+      if (item?.read_only) {
+        return {
+          state: {
+            ...enterSession(s, id),
+            history: { loadingFor: null, failedFor: null },
+            stream: s.sessions.active === id ? s.stream : [],
+          },
+          effects: [],
+        };
+      }
       return { state: enterSession(s, id), effects: [{ kind: "send", frame: sessionsSwitch(id) }] };
     }
     if (g === "doubleClick") return { state: s, effects: [{ kind: "exit" }] };

@@ -28,4 +28,49 @@ describe("sessionListRows", () => {
 
     expect(rows.every((row) => utf8.encode(row).length <= 63)).toBe(true);
   });
+
+  it("appends (read-only) for read_only session items", () => {
+    const rows = sessionListRows([
+      {
+        id: "ro-1",
+        title: "🔒 Telegram chat",
+        updated: 1_780_000_000,
+        read_only: true,
+      },
+    ], null, 1_780_000_000);
+
+    expect(rows[1]).toBe("  now 🔒 Telegram chat (read-only)");
+    expect(utf8.encode(rows[1]).length).toBeLessThanOrEqual(63);
+  });
+
+  it("ensures (read-only) survives truncation on long titles and respects byte limit", () => {
+    const rows = sessionListRows([
+      {
+        id: "ro-long",
+        title: "🔒 A very long Telegram conversation about planning and release schedule with multiple topics",
+        updated: 1_780_000_000,
+        read_only: true,
+      },
+    ], null, 1_780_000_000);
+
+    expect(rows[1]).toContain("(read-only)");
+    expect(utf8.encode(rows[1]).length).toBeLessThanOrEqual(63);
+  });
+
+  it("drops age suffix if needed to fit (read-only)", () => {
+    // Title fits pixel width and length, but with "now" age (65 bytes) exceeds 63 bytes.
+    // Without age (61 bytes), it fits completely without truncation.
+    const title = "🔒 Project chat session discussions list here";
+    const rows = sessionListRows([
+      {
+        id: "ro-drop-age",
+        title,
+        updated: 1_780_000_000,
+        read_only: true,
+      },
+    ], null, 1_780_000_000);
+
+    expect(rows[1]).toBe(`  ${title} (read-only)`);
+    expect(utf8.encode(rows[1]).length).toBeLessThanOrEqual(63);
+  });
 });

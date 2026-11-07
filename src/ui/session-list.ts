@@ -34,7 +34,7 @@ export function displayTitle(title: string): string {
   return title.trim() || "New session";
 }
 
-function sessionRowTitle(item: SessionItem): string {
+export function sessionRowTitle(item: SessionItem): string {
   const title = displayTitle(item.title);
   if (title !== "New session") return title;
 
@@ -66,11 +66,69 @@ export function sessionListRows(
   ];
 }
 
-function formatSessionRow(item: SessionItem, active: string | null, nowSeconds: number): string {
+const READ_ONLY_MARKER = " (read-only)";
+
+function truncateTitleToBytes(text: string, maxBytes: number): string {
+  if (utf8.encode(text).length <= maxBytes) return text;
+  const chars = Array.from(text);
+  while (chars.length > 0) {
+    chars.pop();
+    const candidate = chars.length > 0 ? chars.join("").trimEnd() + ELLIPSIS : "";
+    if (utf8.encode(candidate).length <= maxBytes) return candidate;
+  }
+  return "";
+}
+
+export function formatSessionRow(item: SessionItem, active: string | null, nowSeconds: number): string {
   const marker = item.id === active ? "●" : " ";
-  const prefix = `${marker} ${compactAge(item.updated, nowSeconds)} `;
+  const isReadOnly = Boolean(item.read_only);
+  const baseTitle = sessionRowTitle(item);
+  const readOnlyTag = isReadOnly && !baseTitle.endsWith(READ_ONLY_MARKER) ? READ_ONLY_MARKER : "";
+
+  const age = compactAge(item.updated, nowSeconds);
+  let prefix = `${marker} ${age} `;
+
+  if (readOnlyTag) {
+    const fullTextWithAge = `${prefix}${baseTitle}${readOnlyTag}`;
+    const fullTextNoAge = `${marker} ${baseTitle}${readOnlyTag}`;
+
+    // If title + marker does not fit with age, but fits if we drop the age, drop the age
+    const fitsWithAge =
+      utf8.encode(fullTextWithAge).length <= MAX_ITEM_BYTES &&
+      fits(fullTextWithAge, LIST_ROW_WIDTH_PX, MAX_ITEM_CHARS);
+
+    const fitsNoAge =
+      utf8.encode(fullTextNoAge).length <= MAX_ITEM_BYTES &&
+      fits(fullTextNoAge, LIST_ROW_WIDTH_PX, MAX_ITEM_CHARS);
+
+    if (!fitsWithAge && fitsNoAge) {
+      prefix = `${marker} `;
+    }
+
+    // Measure available space for title leaving room for marker
+    const availWidth = LIST_ROW_WIDTH_PX - getTextWidth(prefix) - getTextWidth(readOnlyTag);
+    const availChars = MAX_ITEM_CHARS - prefix.length - readOnlyTag.length;
+    let title = truncateTitle(baseTitle, availWidth, availChars);
+
+    // If byte limit is exceeded, try dropping age if not yet dropped
+    let maxTitleBytes = MAX_ITEM_BYTES - utf8.encode(`${prefix}${readOnlyTag}`).length;
+    if (utf8.encode(title).length > maxTitleBytes && prefix !== `${marker} `) {
+      prefix = `${marker} `;
+      const newAvailWidth = LIST_ROW_WIDTH_PX - getTextWidth(prefix) - getTextWidth(readOnlyTag);
+      const newAvailChars = MAX_ITEM_CHARS - prefix.length - readOnlyTag.length;
+      title = truncateTitle(baseTitle, newAvailWidth, newAvailChars);
+      maxTitleBytes = MAX_ITEM_BYTES - utf8.encode(`${prefix}${readOnlyTag}`).length;
+    }
+
+    if (utf8.encode(title).length > maxTitleBytes) {
+      title = truncateTitleToBytes(title, maxTitleBytes);
+    }
+
+    return truncateBytes(`${prefix}${title}${readOnlyTag}`, MAX_ITEM_BYTES);
+  }
+
   const title = truncateTitle(
-    sessionRowTitle(item),
+    baseTitle,
     LIST_ROW_WIDTH_PX - getTextWidth(prefix),
     MAX_ITEM_CHARS - prefix.length,
   );

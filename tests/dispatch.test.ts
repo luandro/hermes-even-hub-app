@@ -5,7 +5,7 @@ import { sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../src/proto
 import { threadPages } from "../src/ui/stream";
 import { buildListView } from "../src/ui/views";
 
-function listWith(items: { id: string; title: string; updated?: number }[]): AppState {
+function listWith(items: { id: string; title: string; updated?: number; read_only?: boolean }[]): AppState {
   return {
     ...initialState(),
     sessionsLoaded: true,
@@ -51,6 +51,30 @@ describe("dispatch: list", () => {
     ]), "click", 2);
     expect(r.state.sessions.active).toBe("middle");
     expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("middle") }]);
+  });
+  it("taps on read_only sessions open them locally without sending sessions.switch", () => {
+    const r = dispatch(
+      listWith([
+        { id: "ro", title: "🔒 Telegram session", read_only: true },
+        { id: "b", title: "B" },
+      ]),
+      "click",
+      1,
+    );
+    expect(r.state.screen).toBe("session");
+    expect(r.state.sessions.active).toBe("ro");
+    expect(r.effects).toEqual([]);
+  });
+  it("taps on read_only sessions with shown snapshot open locally without switch", () => {
+    const s = listWith([
+      { id: "ro", title: "🔒 Telegram session", read_only: true },
+      { id: "b", title: "B" },
+    ]);
+    const shown = buildListView(s);
+    const r = dispatch(s, "click", 1, shown);
+    expect(r.state.screen).toBe("session");
+    expect(r.state.sessions.active).toBe("ro");
+    expect(r.effects).toEqual([]);
   });
   it("double-press exits the app", () => {
     const r = dispatch(listWith([]), "doubleClick");

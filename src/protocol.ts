@@ -3,6 +3,9 @@ export interface SessionItem {
   title: string;
   updated: number;
   tokens?: number;
+  foreign?: boolean;
+  read_only?: boolean;
+  platform?: string;
 }
 
 export type HistoryItem =

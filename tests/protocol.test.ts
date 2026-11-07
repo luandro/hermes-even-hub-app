@@ -21,4 +21,35 @@ describe("protocol", () => {
     expect(JSON.parse(audioStart())).toEqual({ t: "audio.start" });
     expect(JSON.parse(audioStop())).toEqual({ t: "audio.stop" });
   });
+  it("parses sessions frame containing foreign and read_only telegram sessions", () => {
+    const raw = JSON.stringify({
+      t: "sessions",
+      active: null,
+      items: [
+        {
+          id: "tg-1",
+          title: "🔒 Telegram Session",
+          updated: 1780000000,
+          foreign: true,
+          read_only: true,
+          platform: "telegram",
+        },
+      ],
+    });
+    const parsed = parseServer(raw);
+    expect(parsed).toEqual({
+      t: "sessions",
+      active: null,
+      items: [
+        {
+          id: "tg-1",
+          title: "🔒 Telegram Session",
+          updated: 1780000000,
+          foreign: true,
+          read_only: true,
+          platform: "telegram",
+        },
+      ],
+    });
+  });
 });

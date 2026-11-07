@@ -15,6 +15,12 @@ export interface AudioCapture {
 
 export type CaptureErrorHandler = (err: unknown) => void;
 
+let micStopPendingCleanup = false;
+
+export function resetCaptureState(): void {
+  micStopPendingCleanup = false;
+}
+
 export function createCapture(
   bridge: EvenAppBridge,
   client: BridgeClient,
@@ -25,6 +31,14 @@ export function createCapture(
     get recording() { return recording; },
     async start() {
       if (recording) return;
+      if (micStopPendingCleanup) {
+        try {
+          await bridge.audioControl(false);
+        } catch {
+          // best-effort cleanup
+        }
+        micStopPendingCleanup = false;
+      }
       recording = true;
       client.send(audioStart());
       try {
@@ -41,8 +55,14 @@ export function createCapture(
       if (!recording) return;
       recording = false;
       try {
-        await bridge.audioControl(false);
+        try {
+          await bridge.audioControl(false);
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          await bridge.audioControl(false);
+        }
       } catch (err) {
+        micStopPendingCleanup = true;
         console.error("[capture] failed to stop mic", err);
         onError?.(err);
         throw err;

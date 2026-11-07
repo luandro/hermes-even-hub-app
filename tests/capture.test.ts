@@ -151,12 +151,58 @@ describe("createCapture", () => {
     expect(capture.recording).toBe(true);
     client.send.mockClear();
 
-    bridge.audioControl.mockRejectedValueOnce(new Error("mic stop failed"));
+    bridge.audioControl.mockRejectedValue(new Error("mic stop failed"));
 
     await expect(capture.stop()).rejects.toThrow("mic stop failed");
 
     expect(capture.recording).toBe(false);
     expect(client.send).toHaveBeenCalledWith(audioStop());
     expect(onError).toHaveBeenCalled();
+  });
+
+  it("retries audioControl(false) once after 300ms on stop failure", async () => {
+    const bridge = fakeBridge();
+    const client = fakeClient();
+    const capture = createCapture(bridge, client);
+
+    await capture.start();
+    bridge.audioControl.mockClear();
+
+    // Fail first, succeed on retry
+    bridge.audioControl.mockRejectedValueOnce(new Error("temp error"));
+    bridge.audioControl.mockResolvedValueOnce(undefined);
+
+    await capture.stop();
+
+    expect(bridge.audioControl).toHaveBeenCalledTimes(2);
+    expect(bridge.audioControl).toHaveBeenNthCalledWith(1, false);
+    expect(bridge.audioControl).toHaveBeenNthCalledWith(2, false);
+    expect(client.send).toHaveBeenCalledWith(audioStop());
+  });
+
+  it("marks flag on persistent stop failure so next start attempts audioControl(false) first", async () => {
+    const bridge = fakeBridge();
+    const client = fakeClient();
+    const capture = createCapture(bridge, client);
+
+    await capture.start();
+    bridge.audioControl.mockClear();
+    client.send.mockClear();
+
+    // Persistent failure on stop
+    bridge.audioControl.mockRejectedValue(new Error("unrecoverable stop error"));
+    await expect(capture.stop()).rejects.toThrow("unrecoverable stop error");
+
+    bridge.audioControl.mockReset();
+    bridge.audioControl.mockResolvedValue(undefined);
+    client.send.mockClear();
+
+    // Now start again
+    await capture.start();
+
+    // Should have attempted audioControl(false) first, then audioControl(true)
+    expect(bridge.audioControl).toHaveBeenCalledTimes(2);
+    expect(bridge.audioControl).toHaveBeenNthCalledWith(1, false);
+    expect(bridge.audioControl).toHaveBeenNthCalledWith(2, true);
   });
 });

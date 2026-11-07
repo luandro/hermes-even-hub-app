@@ -83,7 +83,8 @@ export function formatSessionRow(item: SessionItem, active: string | null, nowSe
   const marker = item.id === active ? "●" : " ";
   const isReadOnly = Boolean(item.read_only);
   const baseTitle = sessionRowTitle(item);
-  const readOnlyTag = isReadOnly && !baseTitle.endsWith(READ_ONLY_MARKER) ? READ_ONLY_MARKER : "";
+  const hasLockPrefix = baseTitle.startsWith("🔒");
+  const readOnlyTag = isReadOnly && !hasLockPrefix && !baseTitle.endsWith(READ_ONLY_MARKER) ? READ_ONLY_MARKER : "";
 
   const age = compactAge(item.updated, nowSeconds);
   let prefix = `${marker} ${age} `;

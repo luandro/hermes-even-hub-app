@@ -1,8 +1,14 @@
 import type { EvenAppBridge } from "@evenrealities/even_hub_sdk";
 import type { AppState, StreamItem } from "../state/store";
-import { barText, connDot, isHistoryLoading } from "../state/store";
+import { HINTS, barText, connDot, isHistoryLoading } from "../state/store";
 import { IDS, setText, showListPage, showLoadingPage } from "./render";
-import { LOADING_SESSIONS_ROW, orderedSessions, sessionListRows, truncateTitle } from "./session-list";
+import {
+  LOADING_SESSIONS_ROW,
+  NEW_SESSION_ROW,
+  formatSessionRow,
+  listableSessions,
+  truncateTitle,
+} from "./session-list";
 import { currentThreadViewport } from "./stream";
 
 export function truncateRow(title: string): string {
@@ -28,9 +34,14 @@ export interface ListView {
 
 export function buildListView(s: AppState, nowSeconds?: number): ListView {
   if (!s.sessionsLoaded) return { rows: [LOADING_SESSIONS_ROW], ids: [null] };
+  const now = nowSeconds ?? Math.floor(Date.now() / 1000);
+  // ONE filtered array feeds both rows and ids: the glasses report a tap as an
+  // index into the rows on screen, so ids[i] must be the session rows[i] was
+  // drawn from — foreign/read-only sessions never enter the mapping.
+  const listable = listableSessions(s.sessions.items);
   return {
-    rows: sessionListRows(s.sessions.items, s.sessions.active, nowSeconds),
-    ids: [null, ...orderedSessions(s.sessions.items).map((i) => i.id)],
+    rows: [NEW_SESSION_ROW, ...listable.map((item) => formatSessionRow(item, s.sessions.active, now))],
+    ids: [null, ...listable.map((item) => item.id)],
   };
 }
 
@@ -56,18 +67,30 @@ export function loadingText(s: AppState): string {
 
 export async function renderSession(bridge: EvenAppBridge, s: AppState): Promise<void> {
   const active = s.sessions.items.find((i) => i.id === s.sessions.active);
-  const title = active && active.title.trim() ? truncateRow(active.title) : "Hermes";
-  await setText(bridge, IDS.header, title);
+  const rawTitle = active?.title.trim() ?? "";
+  await setText(bridge, IDS.header, headerTitle(rawTitle, s));
   await setText(bridge, IDS.dot, connDot(s.conn));
 
   const body = isHistoryLoading(s)
-    ? "loading session..."
+    ? HINTS.historyLoading
     : displayThreadItems(s).length === 0
-      ? (s.readonlyNoHistory ? "" : "tap to speak")
+      ? (s.readonlyNoHistory ? "" : HINTS.tapToSpeak)
       : threadViewportText(s);
   await setText(bridge, IDS.body, body);
 
   await setText(bridge, IDS.status, statusText(s));
+}
+
+/**
+ * sessions.new sessions have no protocol-level title, so an untitled session
+ * ("New session" or blank) shows what the wearer first said instead — the only
+ * label the client owns without a rename protocol.
+ */
+function headerTitle(rawTitle: string, s: AppState): string {
+  if (rawTitle && rawTitle !== "New session") return truncateRow(rawTitle);
+  const firstUser = s.stream.find((it): it is StreamItem & { kind: "user" } => it.kind === "user");
+  const snippet = firstUser?.text.trim();
+  return snippet ? truncateRow(snippet) : "Hermes";
 }
 
 function threadViewportText(s: AppState): string {

@@ -2,14 +2,17 @@ import { waitForEvenAppBridge, OsEventTypeList } from "@evenrealities/even_hub_s
 import "./style.css";
 import { loadBridgeDefaults } from "./config";
 import { BridgeClient } from "./net/ws-client";
-import { initialState, reduce, markDeliveryUncertain, type AppState } from "./state/store";
-import { createLoadingStartup, createSetupStartup, showListPage, showLoadingPage, showSessionPage } from "./ui/render";
-import { loadingText, renderSession, buildListView, type ListView } from "./ui/views";
-import { renderPhoneSetup } from "./ui/phone";
-import { routeEvent, type ListSelection } from "./input/router";
-import { dispatch, type Gesture, type Effect } from "./input/dispatch";
+import { initialState, applyDisconnected, markDeliveryUncertain, type AppState } from "./state/store";
+import { createHistoryWatch } from "./state/history-watch";
+import { applyServerMessage, type ConnectionFlags } from "./state/connection";
 import { sessionsList } from "./protocol";
-import { serializeLatest } from "./util/coalesce";
+import { createLoadingStartup, createSetupStartup, showLoadingPage } from "./ui/render";
+import { loadingText } from "./ui/views";
+import { createPageRenderer, pageRendererDeps } from "./ui/render-queue";
+import { renderPhoneSetup } from "./ui/phone";
+import { routeEvent, resolveListSelection } from "./input/router";
+import { dispatch, type Gesture, type Effect } from "./input/dispatch";
+import { isKnownOwnSession } from "./ui/session-list";
 import { createCapture } from "./audio/capture";
 import {
   isConfiguredProfile,
@@ -29,6 +32,9 @@ const fireAndForget = (p: Promise<unknown>): void => { void p.catch(() => {}); }
  */
 const LIST_SCROLL_GRACE_MS = 8_000;
 
+/** A history load that has not answered by then is treated as refused (F7). */
+const HISTORY_TIMEOUT_MS = 6_000;
+
 async function boot(): Promise<void> {
   const root = document.querySelector<HTMLElement>("#app");
   if (!root) throw new Error("Missing #app root");
@@ -39,13 +45,13 @@ async function boot(): Promise<void> {
   let state: AppState = initialState();
   let phoneErrors: string[] = [];
   let glassesView: "setup" | "list" = profileIsReady(profile) ? "list" : "setup";
-  let shownList: ListView = buildListView(state);
-  let visibleListRows = shownList.rows;
   /** When the wearer last scrolled the list — a rebuild while reading is hostile. */
   let lastListScrollAt = 0;
-  /** Whether the list page is the one currently built on the glasses. */
-  let listRendered = false;
-  let helloOk = false;
+  /**
+   * Boot resume runs ONCE per app launch (reset only by saveAndConnect, never
+   * on hello.ok): a reconnect re-pins instead, so in-progress work survives.
+   */
+  let flags: ConnectionFlags = { helloOk: false, bootResumeDone: false };
   let sessionsRetryTimer: ReturnType<typeof setInterval> | undefined;
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   const deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -105,35 +111,28 @@ async function boot(): Promise<void> {
     await createSetupStartup(bridge);
   }
 
-  const scheduleRender = serializeLatest(async (s: AppState) => {
-    if (glassesView === "setup") return;
-    if (s.screen === "list") {
-      if (!s.sessionsLoaded) {
-        await showLoadingPage(bridge, loadingText(s));
-        return;
-      }
-      const next = buildListView(s);
-      // A list cannot be updated in place, so every render is a full rebuild —
-      // and a rebuild throws away the native scroll position and selection.
-      // Two guards, because `sessions` frames arrive on their own schedule and
-      // would otherwise yank the wearer back to the top mid-scroll:
-      //   1. identical rows → nothing to show, skip
-      //   2. scrolled in the last few seconds → they are reading, defer
-      const unchanged =
-        next.rows.length === shownList.rows.length && next.rows.every((r, i) => r === shownList.rows[i]);
-      const browsing = Date.now() - lastListScrollAt < LIST_SCROLL_GRACE_MS;
-      if (listRendered && (unchanged || browsing)) return;
+  // The ONE path that writes pages to the glasses; page-kind transitions ride
+  // inside the serialized queue so a resume can never race a list build (F4).
+  const pages = createPageRenderer(pageRendererDeps(bridge, () =>
+    Date.now() - lastListScrollAt < LIST_SCROLL_GRACE_MS,
+  ));
+  const scheduleRender = (s: AppState): void => {
+    if (glassesView !== "setup") pages.render(s);
+  };
 
-      // Only adopt the snapshot when it is actually drawn — a tap resolves
-      // against it, so a stale one would open the wrong row.
-      shownList = next;
-      visibleListRows = next.rows;
-      listRendered = true;
-      await showListPage(bridge, next.rows);
-      return;
-    }
-    listRendered = false;
-    await renderSession(bridge, s);
+  /**
+   * A history load that never resolves (bridge wedged on the switch) must not
+   * leave the bar at "loading session..." forever — same fallback as an
+   * explicit error frame, on a client-side timer (F7, N1a/N2).
+   */
+  const historyWatch = createHistoryWatch(HISTORY_TIMEOUT_MS, {
+    getState: () => state,
+    onTransition: (s, effects) => {
+      state = s;
+      for (const e of effects) runEffect(e);
+      scheduleRender(state);
+      armNoticeTimer();
+    },
   });
 
   const renderPhone = (): void => {
@@ -169,7 +168,7 @@ async function boot(): Promise<void> {
   const startSessionsRetry = (): void => {
     if (sessionsRetryTimer) return;
     sessionsRetryTimer = setInterval(() => {
-      if (helloOk && !state.sessionsLoaded) client.send(sessionsList());
+      if (flags.helloOk && !state.sessionsLoaded) client.send(sessionsList());
     }, 2000);
   };
 
@@ -180,29 +179,35 @@ async function boot(): Promise<void> {
 
   const client = new BridgeClient({
     onMessage: (m) => {
-      state = reduce(state, m);
-      scheduleRender(state);
-      if (m.t === "ack") {
-        clearDeliveryTimer(m.id);
-        if (!m.ok) armNoticeTimer();
-      }
-      if (m.t === "hello.ok") {
-        helloOk = true;
-        client.send(sessionsList());
-        startSessionsRetry();
-        persistActiveSession(m.active);
-      }
+      const prevNotice = state.notice;
+      const prevLoadingFor = state.history.loadingFor;
+      // Frame sequencing (re-pin, boot resume, recovery, persist gating) lives
+      // in the pure connection layer; main only wires side effects. The render
+      // is scheduled AFTER the resume decision so the first sessions frame
+      // can't draw a list the resume is about to replace (F4).
+      const r = applyServerMessage(state, m, flags, profile?.activeSession ?? null);
+      state = r.state;
+      flags = r.flags;
+      // Any freshly-set notice (error frame, empty transcript, …) auto-expires.
+      if (state.notice && state.notice !== prevNotice) armNoticeTimer();
+      for (const e of r.effects) runEffect(e);
+      if (r.persist) persistActiveSession(r.persist);
+      if (m.t === "hello.ok") startSessionsRetry();
       if (m.t === "sessions") stopSessionsRetry();
-      if (m.t === "active") persistActiveSession(m.id);
-      if (m.t === "notice") {
-        armNoticeTimer();
-      }
+      if (m.t === "ack") clearDeliveryTimer(m.id);
+      scheduleRender(state);
+      historyWatch.update(prevLoadingFor, state.history.loadingFor);
     },
     onStatus: setStatus,
     onDisconnected: () => {
       clearAllDeliveryTimers();
+      // Recording into a dropped socket would produce a turn that can never be
+      // delivered — stop the mic and fall back to idle.
+      if (state.phase === "recording") {
+        capture.stop().catch(() => {});
+      }
       const prev = state;
-      state = markDeliveryUncertain(state);
+      state = applyDisconnected(state);
       if (state !== prev) {
         scheduleRender(state);
         armNoticeTimer();
@@ -230,14 +235,14 @@ async function boot(): Promise<void> {
       glassesView = "list";
       await showLoadingPage(bridge, loadingText(state));
     }
-    helloOk = false;
+    // A user-initiated connect is a fresh launch for the boot resume (F1).
+    flags = { helloOk: false, bootResumeDone: false };
     client.connect(profile);
     renderPhone();
   }
 
   renderPhone();
   if (profileIsReady(profile)) {
-    helloOk = false;
     client.connect(profile);
   }
 
@@ -276,42 +281,24 @@ async function boot(): Promise<void> {
     else if (e.kind === "exit") bridge.shutDownPageContainer(1);
   }
 
-  function selectedListIndex(selection?: ListSelection): number | undefined {
-    if (selection?.index !== undefined) return selection.index;
-    if (selection?.name !== undefined) {
-      const index = visibleListRows.indexOf(selection.name);
-      return index >= 0 ? index : -1;
-    }
-    return undefined;
-  }
-
-  async function applyGesture(g: Gesture, index?: number): Promise<void> {
+  function applyGesture(g: Gesture, index?: number): void {
     clearNoticeTimer();
     if (glassesView === "setup") {
       if (g === "doubleClick") bridge.shutDownPageContainer(1);
       return;
     }
 
-    const prevScreen = state.screen;
     if (state.screen === "list" && (g === "scrollUp" || g === "scrollDown")) lastListScrollAt = Date.now();
 
+    const prevLoadingFor = state.history.loadingFor;
     // Resolve the tap against what is ON SCREEN — the list re-sorts underneath us.
-    const r = dispatch(state, g, index, shownList);
+    const r = dispatch(state, g, index, pages.snapshot());
     state = r.state;
+    if (state.notice) armNoticeTimer();
     for (const e of r.effects) runEffect(e);
-    if (state.screen !== prevScreen) {
-      if (state.screen === "list") {
-        shownList = buildListView(state);
-        visibleListRows = shownList.rows;
-        listRendered = true;
-        await showListPage(bridge, visibleListRows);
-      }
-      else {
-        listRendered = false;
-        await showSessionPage(bridge);
-      }
-    }
+    // Page transitions (list ↔ session) ride inside the serialized renderer.
     scheduleRender(state);
+    historyWatch.update(prevLoadingFor, state.history.loadingFor);
   }
 
   let torn = false;
@@ -319,6 +306,7 @@ async function boot(): Promise<void> {
     if (torn) return;
     torn = true;
     clearNoticeTimer();
+    historyWatch.dispose();
     off();
     capture.stop().catch(() => {});
     stopSessionsRetry();
@@ -329,7 +317,12 @@ async function boot(): Promise<void> {
     capture.handleEvent(e);
     const et = e.sysEvent?.eventType ?? e.listEvent?.eventType ?? e.textEvent?.eventType;
     if (et === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
-      if (profile) fireAndForget(updateActiveSession(bridge, profile, state.sessions.active ?? ""));
+      // Persist only a KNOWN OWN session: a foreign or unknown id must never
+      // overwrite the saved G2 session — skip rather than clear.
+      const activeId = state.sessions.active;
+      if (profile && activeId && isKnownOwnSession(state.sessions.items, activeId)) {
+        fireAndForget(updateActiveSession(bridge, profile, activeId));
+      }
       return;
     }
     if (et === OsEventTypeList.SYSTEM_EXIT_EVENT || et === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
@@ -337,10 +330,12 @@ async function boot(): Promise<void> {
       return;
     }
     routeEvent(e, {
-      onClick: (selection) => { fireAndForget(applyGesture("click", selectedListIndex(selection))); },
-      onDoubleClick: () => { fireAndForget(applyGesture("doubleClick")); },
-      onScrollUp: () => { fireAndForget(applyGesture("scrollUp")); },
-      onScrollDown: () => { fireAndForget(applyGesture("scrollDown")); },
+      // A name the host reports must be unique on screen — duplicates are
+      // ambiguous and the tap is dropped rather than guessed (F10).
+      onClick: (selection) => applyGesture("click", resolveListSelection(selection, pages.snapshot().rows)),
+      onDoubleClick: () => applyGesture("doubleClick"),
+      onScrollUp: () => applyGesture("scrollUp"),
+      onScrollDown: () => applyGesture("scrollDown"),
     });
   });
 

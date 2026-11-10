@@ -1,7 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { sessionListRows } from "../src/ui/session-list";
+import {
+  NEW_SESSION_ROW,
+  isOwnSession,
+  listableSessions,
+  pickResumeSession,
+  sessionListRows,
+} from "../src/ui/session-list";
+import type { SessionItem } from "../src/protocol";
 
 const utf8 = new TextEncoder();
+
+const own = (id: string, updated = 1): SessionItem => ({ id, title: `chat ${id}`, updated });
+const foreign = (id: string, updated = 1): SessionItem => ({ id, title: `tg ${id}`, updated, foreign: true });
+const readOnly = (id: string, updated = 1): SessionItem => ({ id, title: `ro ${id}`, updated, read_only: true });
+
+describe("isOwnSession", () => {
+  it("accepts a plain G2 session", () => {
+    expect(isOwnSession(own("a"))).toBe(true);
+  });
+  it("rejects foreign (Telegram) sessions", () => {
+    expect(isOwnSession(foreign("a"))).toBe(false);
+  });
+  it("rejects read-only sessions", () => {
+    expect(isOwnSession(readOnly("a"))).toBe(false);
+  });
+  it("rejects a session that is both foreign and read-only", () => {
+    expect(isOwnSession({ ...own("a"), foreign: true, read_only: true })).toBe(false);
+  });
+});
+
+describe("listableSessions", () => {
+  it("keeps only own sessions, newest first", () => {
+    const items = [foreign("f1", 900), own("old", 100), readOnly("r1", 800), own("new", 300)];
+    expect(listableSessions(items).map((i) => i.id)).toEqual(["new", "old"]);
+  });
+});
 
 describe("sessionListRows", () => {
   it("keeps same-age untitled sessions visually distinct", () => {
@@ -29,62 +62,48 @@ describe("sessionListRows", () => {
     expect(rows.every((row) => utf8.encode(row).length <= 63)).toBe(true);
   });
 
-  it("does not append (read-only) if title already starts with a lock emoji", () => {
-    const rows = sessionListRows([
-      {
-        id: "ro-1",
-        title: "🔒 Telegram chat",
-        updated: 1_780_000_000,
-        read_only: true,
-      },
-    ], null, 1_780_000_000);
-
-    expect(rows[1]).toBe("  now 🔒 Telegram chat");
-    expect(utf8.encode(rows[1]).length).toBeLessThanOrEqual(63);
+  it("hides foreign and read-only sessions entirely", () => {
+    const rows = sessionListRows([own("a", 1), foreign("f", 2), readOnly("r", 3)], null, 1);
+    expect(rows).toEqual([NEW_SESSION_ROW, "  now chat a"]);
   });
 
-  it("appends (read-only) if title does not start with a lock emoji", () => {
-    const rows = sessionListRows([
-      {
-        id: "ro-2",
-        title: "Telegram chat",
-        updated: 1_780_000_000,
-        read_only: true,
-      },
-    ], null, 1_780_000_000);
+  it("shows exactly ＋New plus the own rows for a realistic mixed fixture", () => {
+    const items: SessionItem[] = [
+      ...Array.from({ length: 12 }, (_, i) => foreign(`tg-${i}`, 1000 + i)),
+      own("own-1", 5),
+      own("own-2", 3),
+      own("own-3", 1),
+    ];
+    const rows = sessionListRows(items, "own-2", 10);
 
-    expect(rows[1]).toBe("  now Telegram chat (read-only)");
-    expect(utf8.encode(rows[1]).length).toBeLessThanOrEqual(63);
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toBe(NEW_SESSION_ROW);
+    expect(rows.some((r) => r.includes("tg-"))).toBe(false);
+    expect(rows[1]).toBe("  now chat own-1"); // newest own first
+    expect(rows[2]).toBe("● now chat own-2"); // active marker survives filtering
   });
+});
 
-  it("ensures (read-only) survives truncation on long titles and respects byte limit", () => {
-    const rows = sessionListRows([
-      {
-        id: "ro-long",
-        title: "A very long Telegram conversation about planning and release schedule with multiple topics",
-        updated: 1_780_000_000,
-        read_only: true,
-      },
-    ], null, 1_780_000_000);
+describe("pickResumeSession", () => {
+  const items: SessionItem[] = [foreign("f", 900), readOnly("r", 800), own("new", 300), own("old", 100)];
 
-    expect(rows[1]).toContain("(read-only)");
-    expect(utf8.encode(rows[1]).length).toBeLessThanOrEqual(63);
+  it("prefers the bridge-reported active id when it is own", () => {
+    expect(pickResumeSession(items, "old", "new")).toBe("old");
   });
-
-  it("drops age suffix if needed to fit (read-only)", () => {
-    // Title fits pixel width and length, but with "now" age (64 bytes) exceeds 63 bytes.
-    // Without age (60 bytes), it fits completely without truncation.
-    const title = "Project chat session discussions list iiiiiiii";
-    const rows = sessionListRows([
-      {
-        id: "ro-drop-age",
-        title,
-        updated: 1_780_000_000,
-        read_only: true,
-      },
-    ], null, 1_780_000_000);
-
-    expect(rows[1]).toBe(`  ${title} (read-only)`);
-    expect(utf8.encode(rows[1]).length).toBeLessThanOrEqual(63);
+  it("falls back to the persisted id when the bridge active id is foreign", () => {
+    expect(pickResumeSession(items, "f", "old")).toBe("old");
+  });
+  it("falls back to the persisted id when the bridge reports no active session", () => {
+    expect(pickResumeSession(items, null, "old")).toBe("old");
+  });
+  it("ignores a persisted foreign, read-only, or unknown id", () => {
+    expect(pickResumeSession(items, null, "f")).toBe("new");
+    expect(pickResumeSession(items, null, "r")).toBe("new");
+    expect(pickResumeSession(items, null, "missing")).toBe("new");
+    expect(pickResumeSession(items, null, null)).toBe("new");
+  });
+  it("returns null when no own session exists (caller creates one)", () => {
+    expect(pickResumeSession([foreign("f"), readOnly("r")], null, "f")).toBeNull();
+    expect(pickResumeSession([], null, null)).toBeNull();
   });
 });

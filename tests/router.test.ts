@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { OsEventTypeList } from "@evenrealities/even_hub_sdk";
-import { routeEvent } from "../src/input/router";
+import { routeEvent, resolveListSelection } from "../src/input/router";
 import type { InputActions } from "../src/input/router";
 
 function makeActions(): InputActions {
@@ -120,5 +120,26 @@ describe("routeEvent", () => {
   it("does not throw when foreground handlers are omitted", () => {
     const a = { onClick: vi.fn(), onDoubleClick: vi.fn(), onScrollUp: vi.fn(), onScrollDown: vi.fn() };
     expect(() => routeEvent({ sysEvent: { eventType: OsEventTypeList.FOREGROUND_EXIT_EVENT } } as any, a)).not.toThrow();
+  });
+});
+
+describe("resolveListSelection (name → row index)", () => {
+  const rows = ["＋ New session", "  2h grocery list", "● 2h gym plan", "  2h grocery list"];
+
+  it("passes a reported index through", () => {
+    expect(resolveListSelection({ index: 2, name: undefined }, rows)).toBe(2);
+    expect(resolveListSelection({ index: 0 }, rows)).toBe(0);
+  });
+  it("resolves a unique row name to its index", () => {
+    expect(resolveListSelection({ index: undefined, name: "● 2h gym plan" }, rows)).toBe(2);
+  });
+  it("refuses to guess when two rows show the same name (F10)", () => {
+    expect(resolveListSelection({ index: undefined, name: "  2h grocery list" }, rows)).toBe(-1);
+  });
+  it("unknown names resolve to -1 (tap ignored)", () => {
+    expect(resolveListSelection({ index: undefined, name: "no such row" }, rows)).toBe(-1);
+  });
+  it("no selection at all stays undefined (caller decides the default)", () => {
+    expect(resolveListSelection(undefined, rows)).toBeUndefined();
   });
 });

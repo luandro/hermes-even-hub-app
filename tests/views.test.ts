@@ -1,7 +1,47 @@
 import { describe, it, expect, vi } from "vitest";
 import { getTextWidth } from "@evenrealities/pretext";
-import { listRows, loadingText, renderList, renderSession } from "../src/ui/views";
+import { listRows, buildListView, loadingText, renderList, renderSession } from "../src/ui/views";
 import { initialState, type AppState } from "../src/state/store";
+
+describe("buildListView", () => {
+  it("derives rows and ids from one filtered array: row i ↔ ids[i], foreign hidden", () => {
+    const s: AppState = {
+      ...initialState(),
+      sessionsLoaded: true,
+      sessions: {
+        items: [
+          { id: "tg-1", title: "Telegram chat", updated: 900, foreign: true },
+          { id: "ro-1", title: "Read-only chat", updated: 800, read_only: true },
+          { id: "own-2", title: "second own", updated: 300 },
+          { id: "own-1", title: "first own", updated: 100 },
+        ],
+        active: "own-2",
+      },
+    };
+    const view = buildListView(s, 400);
+    expect(view.ids).toEqual([null, "own-2", "own-1"]);
+    expect(view.rows).toHaveLength(3);
+    expect(view.rows[1]).toContain("second own");
+    expect(view.rows[1]).toContain("●"); // active marker survives filtering
+    expect(view.rows.some((r) => r.includes("Telegram") || r.includes("Read-only"))).toBe(false);
+  });
+
+  it("shows exactly ＋New plus the 3 own rows for a 12-foreign + 3-own fixture", () => {
+    const items = [
+      ...Array.from({ length: 12 }, (_, i) => ({ id: `tg-${i}`, title: `tg ${i}`, updated: 1000 + i, foreign: true })),
+      { id: "own-a", title: "own a", updated: 5 },
+      { id: "own-b", title: "own b", updated: 3 },
+      { id: "own-c", title: "own c", updated: 1 },
+    ];
+    const view = buildListView(
+      { ...initialState(), sessionsLoaded: true, sessions: { items, active: null } },
+      10,
+    );
+    expect(view.rows).toHaveLength(4);
+    expect(view.rows[0]).toBe("＋ New session");
+    expect(view.ids).toEqual([null, "own-a", "own-b", "own-c"]);
+  });
+});
 
 describe("listRows", () => {
   it("shows a non-actionable loading row until sessions hydrate", () => {
@@ -104,6 +144,52 @@ describe("renderSession", () => {
     expect(calls[2]).toBe("> hi");                // IDS.body
     expect(calls[3]).toBe("ready");               // IDS.status
   });
+  it("falls back to the first user message when the session is untitled", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    const s: AppState = {
+      ...initialState(), screen: "session", phase: "idle", conn: "connected",
+      sessions: { items: [{ id: "a", title: "   ", updated: 0 }], active: "a" },
+      stream: [{ kind: "banner", text: "model: x" }, { kind: "user", text: "how do I fold an omelette" }],
+    };
+    await renderSession(bridge, s);
+    expect(calls[1]).toBe("how do I fold an omelette");
+  });
+  it("treats a literal 'New session' title as untitled", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    const s: AppState = {
+      ...initialState(), screen: "session", phase: "idle", conn: "connected",
+      sessions: { items: [{ id: "a", title: "New session", updated: 0 }], active: "a" },
+      stream: [{ kind: "user", text: "ligar o ventilador" }],
+    };
+    await renderSession(bridge, s);
+    expect(calls[1]).toBe("ligar o ventilador");
+  });
+  it("truncates the fallback snippet to the header width", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    const s: AppState = {
+      ...initialState(), screen: "session", phase: "idle", conn: "connected",
+      sessions: { items: [{ id: "a", title: "", updated: 0 }], active: "a" },
+      stream: [{ kind: "user", text: "w".repeat(120) }],
+    };
+    await renderSession(bridge, s);
+    expect(calls[1].endsWith("…")).toBe(true);
+    expect(calls[1].length).toBeLessThanOrEqual(64);
+    expect(getTextWidth(calls[1])).toBeLessThanOrEqual(540);
+  });
+  it("keeps 'Hermes' when untitled and no user message exists", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    const s: AppState = {
+      ...initialState(), screen: "session", phase: "idle", conn: "connected",
+      sessions: { items: [{ id: "a", title: "", updated: 0 }], active: "a" },
+      stream: [{ kind: "banner", text: "model: x" }],
+    };
+    await renderSession(bridge, s);
+    expect(calls[1]).toBe("Hermes");
+  });
   it("shows loading text while session history is in flight", async () => {
     const calls: Record<number, string> = {};
     const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
@@ -149,7 +235,7 @@ describe("renderSession", () => {
       sessions: { items: [{ id: "a", title: "A", updated: 0 }], active: "a" }, pending: { transcript: "add dark mode" } };
     await renderSession(bridge, s);
     expect(calls[2]).toBe("> add dark mode");
-    expect(calls[3]).toBe("tap = send · swipe↓ = redo");
+    expect(calls[3]).toBe("tap = send · swipe↓ = discard");
   });
   it("keeps the thread visible behind a pending transcript", async () => {
     const calls: Record<number, string> = {};

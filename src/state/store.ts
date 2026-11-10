@@ -1,4 +1,31 @@
 import type { HistoryItem, ServerMsg, SessionItem } from "../protocol";
+import { isKnownForeignSession, truncateTitle } from "../ui/session-list";
+
+/**
+ * Every status/notice string the glasses render, in one place. Firmware-safe
+ * glyphs only — ● ◌ · … ＋ ↓ have font metrics, emoji do NOT (they are dropped
+ * silently; tests/glyphs.test.ts pins this).
+ */
+export const HINTS = {
+  ready: "ready",
+  thinking: "thinking…",
+  working: "working…",
+  // NOT an emoji. The firmware font has none and drops them SILENTLY, so a mic
+  // emoji here rendered as a stray gap. `●` is in the font.
+  recording: "● recording · tap to stop",
+  transcribing: "transcribing…",
+  review: "tap = send · swipe↓ = discard",
+  historyLoading: "loading session...",
+  historyUnavailable: "history unavailable",
+  readonlyBanner: "History not shown (Telegram-owned session, read-only)",
+  tapToSpeak: "tap to speak",
+  noticeDeliveryUncertain: "not delivered · tap to resend",
+  noticeDeliveryOffline: "not delivered · resend when online",
+  noticeTranscriptEmpty: "didn't catch that · tap to retry",
+  noticeOffline: "offline · reconnecting…",
+  noticeOfflineIdle: "offline · check connection",
+  noticeSessionOpenFailed: "couldn't open that session",
+} as const;
 
 export type Screen = "list" | "session";
 export type Phase = "idle" | "recording" | "transcribing" | "review";
@@ -6,19 +33,31 @@ export type Turn = "idle" | "thinking" | "working";
 
 export type StreamItem = HistoryItem;
 
+export interface HistoryState {
+  loadingFor: string | null;
+  failedFor: string | null;
+  /** True when the load was triggered without changing the active session
+   *  (reconnect re-pin): a history reply must preserve in-progress work. */
+  refresh: boolean;
+}
+
 export interface AppState {
   screen: Screen;
   phase: Phase;
   conn: string;
   sessions: { items: SessionItem[]; active: string | null };
   sessionsLoaded: boolean;
-  history: { loadingFor: string | null; failedFor: string | null };
+  history: HistoryState;
   stream: StreamItem[];
   pending: { transcript: string } | null;
   turn: Turn;
   scrollPage: number | null; // null = follow latest viewport; number = measured viewport index (held)
   notice: string | null;
   readonlyNoHistory?: boolean;
+  /** We sent sessions.new and haven't adopted the bridge-assigned id yet. */
+  expectingNewSession: boolean;
+  /** The bridge-assigned id of OUR just-created session, not yet listed own. */
+  unconfirmedOwnId: string | null;
 }
 
 export function initialState(): AppState {
@@ -28,13 +67,15 @@ export function initialState(): AppState {
     conn: "connecting",
     sessions: { items: [], active: null },
     sessionsLoaded: false,
-    history: { loadingFor: null, failedFor: null },
+    history: { loadingFor: null, failedFor: null, refresh: false },
     stream: [],
     pending: null,
     turn: "idle",
     scrollPage: null,
     notice: null,
     readonlyNoHistory: false,
+    expectingNewSession: false,
+    unconfirmedOwnId: null,
   };
 }
 
@@ -72,55 +113,115 @@ function patchTool(stream: StreamItem[], name: string, ok: boolean): StreamItem[
   return stream;
 }
 
+// A reconnect re-pin re-delivers history for the session we are already
+// reading. The server copy is authoritative — except for local turns it never
+// received (delivery "uncertain"): those are still resendable work, so they
+// survive the refresh (matched by text).
+function mergeRefreshedStream(local: StreamItem[], server: StreamItem[]): StreamItem[] {
+  const localUncertain = local.filter(
+    (it): it is StreamItem & { kind: "user" } => it.kind === "user" && it.delivery === "uncertain",
+  );
+  if (localUncertain.length === 0) return server;
+  const serverUserTexts = new Set(
+    server.filter((it): it is StreamItem & { kind: "user" } => it.kind === "user").map((it) => it.text),
+  );
+  const missing = localUncertain.filter((it) => !serverUserTexts.has(it.text));
+  return missing.length ? [...server, ...missing] : server;
+}
+
+const STATUS_BAR_WIDTH_PX = 576;
+const STATUS_BAR_MAX_CHARS = 64;
+
+function truncateNotice(text: string): string {
+  return truncateTitle(text, STATUS_BAR_WIDTH_PX, STATUS_BAR_MAX_CHARS);
+}
+
 export function reduce(s: AppState, m: ServerMsg): AppState {
   switch (m.t) {
     case "hello.ok":
-      return {
-        ...s,
-        sessions: {
-          ...s.sessions,
-          active: s.readonlyNoHistory ? s.sessions.active : m.active,
-        },
-      };
-    case "sessions":
+      // A reconnect must not move the wearer out of their conversation: the
+      // local active id wins; the connection layer re-pins it bridge-side.
+      if (s.sessions.active) return s;
+      if (!m.active || isKnownForeignSession(s.sessions.items, m.active)) return s;
+      return { ...s, sessions: { ...s.sessions, active: m.active } };
+    case "sessions": {
+      const keepActive =
+        isHistoryLoading(s)
+        || s.readonlyNoHistory
+        || isKnownForeignSession(m.items, m.active)
+        // On the session screen the wearer is mid-conversation; a frame echo
+        // (e.g. active "" right after a bridge restart) must not clear it.
+        || (s.screen === "session" && Boolean(s.sessions.active));
+      const unconfirmedListed = Boolean(s.unconfirmedOwnId)
+        && m.items.some((i) => i.id === s.unconfirmedOwnId);
       return {
         ...s,
         sessionsLoaded: true,
-        sessions: {
-          items: m.items,
-          active: isHistoryLoading(s) || s.readonlyNoHistory ? s.sessions.active : m.active,
-        },
+        unconfirmedOwnId: unconfirmedListed ? null : s.unconfirmedOwnId,
+        sessions: { items: m.items, active: keepActive ? s.sessions.active : m.active },
       };
-    case "active":
+    }
+    case "active": {
+      // A Telegram session can be active on the bridge side; adopting its id
+      // here would steal the G2 conversation out from under the wearer.
+      if (isKnownForeignSession(s.sessions.items, m.id)) return s;
+      const unknown = !s.sessions.items.some((i) => i.id === m.id);
+      // The id we just created sessions.new for: unknown to the list, but ours.
+      const claimOurs = unknown && s.expectingNewSession;
       return {
         ...s,
         sessions: { ...s.sessions, active: m.id },
-        history: { loadingFor: m.id, failedFor: null },
+        history: { loadingFor: m.id, failedFor: null, refresh: m.id === s.sessions.active },
         readonlyNoHistory: false,
+        expectingNewSession: claimOurs ? false : s.expectingNewSession,
+        unconfirmedOwnId: claimOurs ? m.id : s.unconfirmedOwnId,
       };
-    case "history":
+    }
+    case "history": {
       if (m.id !== s.sessions.active && m.id !== s.history.loadingFor) return s;
+      // A refresh re-delivers the session we are already reading (reconnect
+      // re-pin): keep the review draft and reading position, keep local turns
+      // the server never received. A cold load (empty stream) resets as before.
+      const refresh = s.history.refresh && s.stream.length > 0;
+      // A refused fetch (ok:false — the bridge answering a re-pin switch with
+      // an empty history and NO active frame, so the refresh flag never
+      // armed) must not wipe the conversation it failed to refresh. Cold
+      // loads always start with an empty local stream, so this only keeps
+      // work that is already on screen.
+      const refused = m.ok === false && s.stream.length > 0;
+      const keepLocal = refresh || refused;
+      const keepReview = keepLocal && s.phase === "review";
       return {
         ...s,
         sessions: { ...s.sessions, active: m.id },
-        history: { loadingFor: null, failedFor: m.ok === false ? m.id : null },
+        history: { loadingFor: null, failedFor: m.ok === false ? m.id : null, refresh: false },
         readonlyNoHistory: false,
-        stream: m.items,
-        pending: null,
-        phase: "idle",
+        stream: refresh ? mergeRefreshedStream(s.stream, m.items) : refused ? s.stream : m.items,
+        pending: keepReview ? s.pending : null,
+        phase: keepReview ? "review" : "idle",
         turn: "idle",
-        scrollPage: null,
+        scrollPage: keepLocal ? s.scrollPage : null,
       };
+    }
     case "error":
-      return { ...s, conn: `error: ${m.msg}` };
+      // Errors arrive while the socket itself may be fine (e.g. a rejected
+      // turn); conn belongs to the ws-client status, so notice-only.
+      return {
+        ...s,
+        turn: "idle",
+        notice: truncateNotice(`error: ${m.msg}`),
+        history: s.history.loadingFor
+          ? { loadingFor: null, failedFor: s.history.loadingFor, refresh: s.history.refresh }
+          : s.history,
+      };
     case "assistant.delta":
-      return { ...s, history: { loadingFor: null, failedFor: null }, stream: appendStream(s.stream, m.text), scrollPage: null };
+      return { ...s, history: { loadingFor: null, failedFor: null, refresh: false }, stream: appendStream(s.stream, m.text), scrollPage: null };
     case "assistant":
-      return { ...s, history: { loadingFor: null, failedFor: null }, stream: replaceAssistantSnapshot(s.stream, m.text), scrollPage: null };
+      return { ...s, history: { loadingFor: null, failedFor: null, refresh: false }, stream: replaceAssistantSnapshot(s.stream, m.text), scrollPage: null };
     case "tool.start":
       return {
         ...s,
-        history: { loadingFor: null, failedFor: null },
+        history: { loadingFor: null, failedFor: null, refresh: false },
         stream: [...s.stream, { kind: "tool", name: m.name, label: m.label, running: true }],
         turn: "working",
         scrollPage: null,
@@ -147,7 +248,7 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
       if (s.phase !== "transcribing") return s;
       return m.text.trim()
         ? { ...s, pending: { transcript: m.text }, phase: "review", scrollPage: null }
-        : { ...s, phase: "idle" };
+        : { ...s, phase: "idle", notice: HINTS.noticeTranscriptEmpty };
     default:
       return s;
   }
@@ -155,28 +256,54 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
 
 export function barText(s: AppState): string {
   switch (s.phase) {
-    // NOT an emoji. The firmware font has none and drops them SILENTLY, so this
-    // rendered as a stray leading space and a bare word — on the one state that
-    // most needs to be unmistakable at a glance. `●` is in the font.
-    case "recording": return "● recording · tap to stop";
-    case "transcribing": return "transcribing…";
-    case "review": return "tap = send · swipe↓ = redo";
+    case "recording": return HINTS.recording;
+    case "transcribing": return HINTS.transcribing;
+    case "review": return HINTS.review;
     case "idle":
     default: {
       if (s.notice) return s.notice;
-      if (s.readonlyNoHistory) return "History not shown (Telegram-owned session, read-only)";
-      if (isHistoryLoading(s)) return "loading session...";
-      if (isHistoryUnavailable(s)) return "history unavailable";
+      // An uncertain last turn is resendable work: the hint belongs in the bar
+      // for as long as it stands — not only while its notice is alive.
+      const last = s.stream[s.stream.length - 1];
+      if (last && last.kind === "user" && last.delivery === "uncertain") {
+        return deliveryHint(s.conn);
+      }
+      if (s.readonlyNoHistory) return HINTS.readonlyBanner;
+      if (isHistoryLoading(s)) return HINTS.historyLoading;
+      if (isHistoryUnavailable(s)) return HINTS.historyUnavailable;
       if (s.turn === "working") {
         for (let i = s.stream.length - 1; i >= 0; i--) {
           const it = s.stream[i];
-          if (it.kind === "tool" && it.running) return `working… (${it.name})`;
+          if (it.kind === "tool" && it.running) return `${HINTS.working} (${it.name})`;
         }
-        return "working…";
+        return HINTS.working;
       }
-      return s.turn === "thinking" ? "thinking…" : "ready";
+      return s.turn === "thinking" ? HINTS.thinking : HINTS.ready;
     }
   }
+}
+
+/** The resend hint picks its wording from the socket: promising "tap to
+ *  resend" while offline would just bounce into an offline notice. */
+export function deliveryHint(conn: string): string {
+  return conn === "connected" ? HINTS.noticeDeliveryUncertain : HINTS.noticeDeliveryOffline;
+}
+
+/** Auto-reconnecting sockets promise a reconnect; dead ones (manual
+ *  disconnect, rejected token) must ask for a check instead. */
+export function offlineNotice(conn: string): string {
+  const autoReconnecting =
+    conn === "reconnecting"
+    || conn === "websocket error; reconnecting"
+    || conn.startsWith("connecting");
+  return autoReconnecting ? HINTS.noticeOffline : HINTS.noticeOfflineIdle;
+}
+
+/** Pure half of the ws-client onDisconnected callback: stop capture phases and
+ *  mark every in-flight turn uncertain — nothing can be delivered now. */
+export function applyDisconnected(s: AppState): AppState {
+  const phase: Phase = s.phase === "recording" || s.phase === "transcribing" ? "idle" : s.phase;
+  return markDeliveryUncertain({ ...s, phase });
 }
 
 export function connDot(conn: string): string {
@@ -189,6 +316,14 @@ export function isHistoryLoading(s: AppState): boolean {
 
 export function isHistoryUnavailable(s: AppState): boolean {
   return Boolean(s.sessions.active && s.history.failedFor === s.sessions.active);
+}
+
+/** A reconnect re-pin's history refresh with work still on screen: F7
+ *  recovery (which enters a session cold) must not wipe it. The empty-stream
+ *  check keeps fallback loads — whose confirming active frame sets the flag
+ *  over a stream enterSession just wiped — fully recoverable. */
+export function isRefreshWithWork(s: AppState): boolean {
+  return s.history.refresh && s.stream.length > 0;
 }
 
 export function markDeliveryUncertain(s: AppState, id?: string): AppState {
@@ -205,6 +340,6 @@ export function markDeliveryUncertain(s: AppState, id?: string): AppState {
     ...s,
     stream,
     turn: "idle",
-    notice: "Delivery not confirmed — check bridge connection",
+    notice: deliveryHint(s.conn),
   };
 }

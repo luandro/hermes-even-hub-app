@@ -25,9 +25,49 @@ export function orderedSessions(items: SessionItem[]): SessionItem[] {
     .map(({ item }) => item);
 }
 
+/** A session the G2 wearer can actually speak into — not Telegram's, not read-only. */
+export function isOwnSession(item: SessionItem): boolean {
+  return !item.read_only && !item.foreign;
+}
+
+/**
+ * The sessions that may appear as list rows, newest first. Rows AND ids derive
+ * from this one array, so row i always resolves to ids[i].
+ */
+export function listableSessions(items: SessionItem[]): SessionItem[] {
+  return orderedSessions(items.filter(isOwnSession));
+}
+
+/** True when the id is in items and flagged foreign/read_only (Telegram-owned). */
+export function isKnownForeignSession(items: SessionItem[], id: string | null | undefined): boolean {
+  if (!id) return false;
+  return items.some((i) => i.id === id && (i.foreign || i.read_only));
+}
+
+/** True when the id is in items and is an own (speakable) session. */
+export function isKnownOwnSession(items: SessionItem[], id: string | null | undefined): boolean {
+  if (!id) return false;
+  return items.some((i) => i.id === id && isOwnSession(i));
+}
+
+/**
+ * Which own session boot resumes into: the bridge's active id if it is own,
+ * else the persisted id if it is own and still known, else the most recent own
+ * session, else null (caller creates a new session).
+ */
+export function pickResumeSession(
+  items: SessionItem[],
+  bridgeActive: string | null,
+  persisted: string | null | undefined,
+): string | null {
+  if (bridgeActive && isKnownOwnSession(items, bridgeActive)) return bridgeActive;
+  if (persisted && isKnownOwnSession(items, persisted)) return persisted;
+  return listableSessions(items)[0]?.id ?? null;
+}
+
 export function sessionForListIndex(items: SessionItem[], index: number): SessionItem | undefined {
   if (index <= 0) return undefined;
-  return orderedSessions(items)[index - 1];
+  return listableSessions(items)[index - 1];
 }
 
 export function displayTitle(title: string): string {
@@ -62,74 +102,17 @@ export function sessionListRows(
 ): string[] {
   return [
     NEW_SESSION_ROW,
-    ...orderedSessions(items).map((item) => formatSessionRow(item, active, nowSeconds)),
+    ...listableSessions(items).map((item) => formatSessionRow(item, active, nowSeconds)),
   ];
-}
-
-const READ_ONLY_MARKER = " (read-only)";
-
-function truncateTitleToBytes(text: string, maxBytes: number): string {
-  if (utf8.encode(text).length <= maxBytes) return text;
-  const chars = Array.from(text);
-  while (chars.length > 0) {
-    chars.pop();
-    const candidate = chars.length > 0 ? chars.join("").trimEnd() + ELLIPSIS : "";
-    if (utf8.encode(candidate).length <= maxBytes) return candidate;
-  }
-  return "";
 }
 
 export function formatSessionRow(item: SessionItem, active: string | null, nowSeconds: number): string {
   const marker = item.id === active ? "●" : " ";
-  const isReadOnly = Boolean(item.read_only);
-  const baseTitle = sessionRowTitle(item);
-  const hasLockPrefix = baseTitle.startsWith("🔒");
-  const readOnlyTag = isReadOnly && !hasLockPrefix && !baseTitle.endsWith(READ_ONLY_MARKER) ? READ_ONLY_MARKER : "";
-
   const age = compactAge(item.updated, nowSeconds);
-  let prefix = `${marker} ${age} `;
-
-  if (readOnlyTag) {
-    const fullTextWithAge = `${prefix}${baseTitle}${readOnlyTag}`;
-    const fullTextNoAge = `${marker} ${baseTitle}${readOnlyTag}`;
-
-    // If title + marker does not fit with age, but fits if we drop the age, drop the age
-    const fitsWithAge =
-      utf8.encode(fullTextWithAge).length <= MAX_ITEM_BYTES &&
-      fits(fullTextWithAge, LIST_ROW_WIDTH_PX, MAX_ITEM_CHARS);
-
-    const fitsNoAge =
-      utf8.encode(fullTextNoAge).length <= MAX_ITEM_BYTES &&
-      fits(fullTextNoAge, LIST_ROW_WIDTH_PX, MAX_ITEM_CHARS);
-
-    if (!fitsWithAge && fitsNoAge) {
-      prefix = `${marker} `;
-    }
-
-    // Measure available space for title leaving room for marker
-    const availWidth = LIST_ROW_WIDTH_PX - getTextWidth(prefix) - getTextWidth(readOnlyTag);
-    const availChars = MAX_ITEM_CHARS - prefix.length - readOnlyTag.length;
-    let title = truncateTitle(baseTitle, availWidth, availChars);
-
-    // If byte limit is exceeded, try dropping age if not yet dropped
-    let maxTitleBytes = MAX_ITEM_BYTES - utf8.encode(`${prefix}${readOnlyTag}`).length;
-    if (utf8.encode(title).length > maxTitleBytes && prefix !== `${marker} `) {
-      prefix = `${marker} `;
-      const newAvailWidth = LIST_ROW_WIDTH_PX - getTextWidth(prefix) - getTextWidth(readOnlyTag);
-      const newAvailChars = MAX_ITEM_CHARS - prefix.length - readOnlyTag.length;
-      title = truncateTitle(baseTitle, newAvailWidth, newAvailChars);
-      maxTitleBytes = MAX_ITEM_BYTES - utf8.encode(`${prefix}${readOnlyTag}`).length;
-    }
-
-    if (utf8.encode(title).length > maxTitleBytes) {
-      title = truncateTitleToBytes(title, maxTitleBytes);
-    }
-
-    return truncateBytes(`${prefix}${title}${readOnlyTag}`, MAX_ITEM_BYTES);
-  }
+  const prefix = `${marker} ${age} `;
 
   const title = truncateTitle(
-    baseTitle,
+    sessionRowTitle(item),
     LIST_ROW_WIDTH_PX - getTextWidth(prefix),
     MAX_ITEM_CHARS - prefix.length,
   );

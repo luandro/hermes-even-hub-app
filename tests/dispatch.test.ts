@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { dispatch } from "../src/input/dispatch";
+import { dispatch, resumeOnBoot, recoverUnavailableSession } from "../src/input/dispatch";
 import { initialState, reduce, type AppState } from "../src/state/store";
 import { sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../src/protocol";
 import { threadPages } from "../src/ui/stream";
 import { buildListView } from "../src/ui/views";
 
-function listWith(items: { id: string; title: string; updated?: number; read_only?: boolean }[]): AppState {
+function listWith(items: { id: string; title: string; updated?: number; read_only?: boolean; foreign?: boolean }[]): AppState {
   return {
     ...initialState(),
     sessionsLoaded: true,
@@ -18,6 +18,11 @@ describe("dispatch: list", () => {
     const r = dispatch(initialState(), "click", 0);
     expect(r.state.screen).toBe("list");
     expect(r.effects).toEqual([]);
+  });
+  it("double-press exits the app even while sessions are still loading", () => {
+    const r = dispatch(initialState(), "doubleClick");
+    expect(r.effects).toEqual([{ kind: "exit" }]);
+    expect(r.state.screen).toBe("list");
   });
 
   it("index 0 (or undefined) creates + opens a new session", () => {
@@ -52,15 +57,22 @@ describe("dispatch: list", () => {
     expect(r.state.sessions.active).toBe("middle");
     expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("middle") }]);
   });
-  it("taps on read_only sessions open them locally without sending sessions.switch and set readonlyNoHistory banner flag", () => {
-    const r = dispatch(
-      listWith([
-        { id: "ro", title: "🔒 Telegram session", read_only: true },
-        { id: "b", title: "B" },
-      ]),
-      "click",
-      1,
-    );
+  it("read_only and foreign sessions never appear in the list snapshot", () => {
+    const s = listWith([
+      { id: "ro", title: "Telegram session", read_only: true },
+      { id: "tg", title: "Foreign session", foreign: true },
+      { id: "b", title: "B" },
+    ]);
+    const shown = buildListView(s);
+    expect(shown.ids).toEqual([null, "b"]);
+  });
+  it("defense-in-depth: a read_only id in a stale snapshot still opens locally without switch", () => {
+    const s = listWith([
+      { id: "ro", title: "Telegram session", read_only: true },
+      { id: "b", title: "B" },
+    ]);
+    const staleRoSnapshot = { ids: [null, "ro"] };
+    const r = dispatch(s, "click", 1, staleRoSnapshot);
     expect(r.state.screen).toBe("session");
     expect(r.state.sessions.active).toBe("ro");
     expect(r.state.readonlyNoHistory).toBe(true);
@@ -69,16 +81,17 @@ describe("dispatch: list", () => {
     // Switching to an owned session clears readonlyNoHistory
     const r2 = dispatch(r.state, "doubleClick"); // back to list
     expect(r2.state.screen).toBe("list");
-    const r3 = dispatch(r2.state, "click", 2); // open "b"
+    const r3 = dispatch(r2.state, "click", 1); // index 1 is now "b" (own only)
     expect(r3.state.sessions.active).toBe("b");
     expect(r3.state.readonlyNoHistory).toBe(false);
   });
   it("keeps active id and prevents mic when sessions frame arrives during read-only view", () => {
     const listState = listWith([
-      { id: "ro", title: "🔒 Telegram session", read_only: true },
+      { id: "ro", title: "Telegram session", read_only: true },
       { id: "owned", title: "Owned session", read_only: false },
     ]);
-    const r1 = dispatch(listState, "click", 1);
+    const staleRoSnapshot = { ids: [null, "ro"] };
+    const r1 = dispatch(listState, "click", 1, staleRoSnapshot);
     expect(r1.state.screen).toBe("session");
     expect(r1.state.sessions.active).toBe("ro");
     expect(r1.state.readonlyNoHistory).toBe(true);
@@ -87,8 +100,8 @@ describe("dispatch: list", () => {
     const afterReconnect = reduce(r1.state, {
       t: "sessions",
       items: [
-        { id: "ro", title: "🔒 Telegram session", read_only: true },
-        { id: "owned", title: "Owned session", read_only: false },
+        { id: "ro", title: "Telegram session", read_only: true, updated: 0 },
+        { id: "owned", title: "Owned session", read_only: false, updated: 0 },
       ],
       active: "owned",
     });
@@ -100,30 +113,18 @@ describe("dispatch: list", () => {
     expect(rClick.state.phase).toBe("idle");
     expect(rClick.effects).toEqual([]);
 
-    // Back to list, then switch to owned session
+    // Back to list, then switch to owned session (own-only list: index 1)
     const rList = dispatch(afterReconnect, "doubleClick");
     expect(rList.state.screen).toBe("list");
-    const rSwitch = dispatch(rList.state, "click", 2);
+    const rSwitch = dispatch(rList.state, "click", 1);
     expect(rSwitch.state.sessions.active).toBe("owned");
     expect(rSwitch.state.readonlyNoHistory).toBe(false);
     expect(rSwitch.effects).toEqual([{ kind: "send", frame: sessionsSwitch("owned") }]);
 
     // Mic is allowed again in the owned session
-    const rMic = dispatch(rSwitch.state, "click");
+    const rMic = dispatch({ ...rSwitch.state, conn: "connected" }, "click");
     expect(rMic.state.phase).toBe("recording");
     expect(rMic.effects).toEqual([{ kind: "startMic" }]);
-  });
-  it("taps on read_only sessions with shown snapshot open locally without switch", () => {
-    const s = listWith([
-      { id: "ro", title: "🔒 Telegram session", read_only: true },
-      { id: "b", title: "B" },
-    ]);
-    const shown = buildListView(s);
-    const r = dispatch(s, "click", 1, shown);
-    expect(r.state.screen).toBe("session");
-    expect(r.state.sessions.active).toBe("ro");
-    expect(r.state.readonlyNoHistory).toBe(true);
-    expect(r.effects).toEqual([]);
   });
   it("double-press exits the app", () => {
     const r = dispatch(listWith([]), "doubleClick");
@@ -140,10 +141,46 @@ describe("dispatch: list", () => {
     expect(r.state.screen).toBe("list");
     expect(r.effects).toEqual([]);
   });
+
+  it("ignores a tap on a stale row whose session is now foreign (F5)", () => {
+    // The displayed snapshot still maps row 1 to a session that a fresh
+    // sessions frame has since marked foreign (without read_only).
+    const displayed = listWith([{ id: "was-mine", title: "Was mine", updated: 2 }]);
+    const shown = buildListView(displayed);
+    const nowForeign = listWith([
+      { id: "was-mine", title: "Was mine", updated: 2, foreign: true },
+      { id: "b", title: "B", updated: 1 },
+    ]);
+    const r = dispatch(nowForeign, "click", 1, shown);
+    expect(r.state.screen).toBe("list");
+    expect(r.state.sessions.active).toBeNull();
+    expect(r.effects).toEqual([]);
+  });
+  it("ignores a tap on a stale row whose session no longer exists (F5)", () => {
+    const displayed = listWith([{ id: "gone", title: "Gone", updated: 2 }]);
+    const shown = buildListView(displayed);
+    const shrunk = listWith([{ id: "b", title: "B", updated: 1 }]);
+    const r = dispatch(shrunk, "click", 1, shown);
+    expect(r.state.screen).toBe("list");
+    expect(r.effects).toEqual([]);
+  });
+  it("still switches for a displayed row that is own in the live list (F5)", () => {
+    const displayed = listWith([{ id: "a", title: "A", updated: 2 }]);
+    const shown = buildListView(displayed);
+    const r = dispatch(displayed, "click", 1, shown);
+    expect(r.state.sessions.active).toBe("a");
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("a") }]);
+  });
+  it("the +New row arms the just-created-session claim so the next active frame is ours (F3)", () => {
+    const r = dispatch(listWith([]), "click", 0);
+    expect(r.state.expectingNewSession).toBe(true);
+    const claimed = reduce(r.state, { t: "active", id: "fresh-9" });
+    expect(claimed.unconfirmedOwnId).toBe("fresh-9");
+  });
 });
 
 function session(phase: AppState["phase"]): AppState {
-  return { ...initialState(), screen: "session", phase };
+  return { ...initialState(), screen: "session", phase, conn: "connected" };
 }
 
 describe("dispatch: session idle", () => {
@@ -152,6 +189,12 @@ describe("dispatch: session idle", () => {
     expect(r.state.phase).toBe("recording");
     expect(r.state.scrollPage).toBeNull();
     expect(r.effects).toEqual([{ kind: "startMic" }]);
+  });
+  it("idle tap while offline shows a notice and does not start the mic", () => {
+    const r = dispatch({ ...session("idle"), conn: "reconnecting" }, "click");
+    expect(r.state.phase).toBe("idle");
+    expect(r.state.notice).toBe("offline · reconnecting…");
+    expect(r.effects).toEqual([]);
   });
   it("double-press returns to the list", () => {
     const r = dispatch(session("idle"), "doubleClick");
@@ -172,6 +215,43 @@ describe("dispatch: session idle", () => {
     const r2 = dispatch(roSession, "doubleClick");
     expect(r2.state.screen).toBe("list");
   });
+  it("blocks the mic when the active session is foreign without read_only (F3)", () => {
+    const foreignSession: AppState = {
+      ...session("idle"),
+      sessions: {
+        items: [{ id: "tg-1", title: "Telegram", updated: 10, foreign: true }],
+        active: "tg-1",
+      },
+    };
+    const r = dispatch(foreignSession, "click");
+    expect(r.state.phase).toBe("idle");
+    expect(r.effects).toEqual([]);
+  });
+  it("allows the mic for our just-created session before any list confirms it (F3)", () => {
+    const freshSession: AppState = {
+      ...session("idle"),
+      unconfirmedOwnId: "fresh-9",
+      sessions: { items: [{ id: "old", title: "Old", updated: 1 }], active: "fresh-9" },
+    };
+    const r = dispatch(freshSession, "click");
+    expect(r.state.phase).toBe("recording");
+    expect(r.effects).toEqual([{ kind: "startMic" }]);
+  });
+  it("blocks the mic for an active id that is neither listed own nor our fresh session (F3)", () => {
+    const unknownActive: AppState = {
+      ...session("idle"),
+      sessions: { items: [{ id: "old", title: "Old", updated: 1 }], active: "who-knows" },
+    };
+    const r = dispatch(unknownActive, "click");
+    expect(r.state.phase).toBe("idle");
+    expect(r.effects).toEqual([]);
+  });
+  it("idle tap on a dead connection asks for a check instead of promising a reconnect (F9b)", () => {
+    const r = dispatch({ ...session("idle"), conn: "error: bridge token rejected" }, "click");
+    expect(r.state.phase).toBe("idle");
+    expect(r.state.notice).toBe("offline · check connection");
+    expect(r.effects).toEqual([]);
+  });
 });
 
 describe("dispatch: session recording", () => {
@@ -188,7 +268,7 @@ describe("dispatch: session recording", () => {
 });
 
 function review(transcript: string): AppState {
-  return { ...initialState(), screen: "session", phase: "review", pending: { transcript } };
+  return { ...initialState(), screen: "session", phase: "review", conn: "connected", pending: { transcript } };
 }
 
 describe("dispatch: session review", () => {
@@ -207,6 +287,7 @@ describe("dispatch: session review", () => {
       ...initialState(),
       screen: "session",
       phase: "idle",
+      conn: "connected",
       turn: "idle",
       stream: [{ kind: "user", text: "retry this", id: "turn-retry", delivery: "uncertain" }],
     };
@@ -225,15 +306,29 @@ describe("dispatch: session review", () => {
     expect(r.state.stream).toEqual([]);
     expect(r.effects).toEqual([]);
   });
-  it("double-press discards and returns to the list", () => {
+  it("double-press discards and stays in the conversation (list stays behind a second double-press)", () => {
     const r = dispatch(review("oops"), "doubleClick");
-    expect(r.state.screen).toBe("list");
+    expect(r.state.screen).toBe("session");
     expect(r.state.pending).toBeNull();
-    expect(r.effects).toEqual([{ kind: "send", frame: sessionsList() }]);
+    expect(r.state.phase).toBe("idle");
+    expect(r.effects).toEqual([]);
   });
   it("tap send resets scroll to follow mode (null)", () => {
     const r = dispatch({ ...review("hello"), scrollPage: 3 }, "click");
     expect(r.state.scrollPage).toBeNull();
+  });
+  it("tap send while offline keeps the transcript and explains instead (F8)", () => {
+    const r = dispatch({ ...review("add dark mode"), conn: "reconnecting" }, "click");
+    expect(r.state.pending).toEqual({ transcript: "add dark mode" });
+    expect(r.state.phase).toBe("review");
+    expect(r.state.notice).toBe("offline · reconnecting…");
+    expect(r.effects).toEqual([]);
+  });
+  it("tap send on a dead connection asks for a check instead (F8/F9b)", () => {
+    const r = dispatch({ ...review("add dark mode"), conn: "disconnected" }, "click");
+    expect(r.state.pending).toEqual({ transcript: "add dark mode" });
+    expect(r.state.notice).toBe("offline · check connection");
+    expect(r.effects).toEqual([]);
   });
 });
 
@@ -315,5 +410,106 @@ describe("a tap resolves against the rows on screen", () => {
     expect(dispatch(after, "click", 1).effects).toEqual([
       { kind: "send", frame: sessionsSwitch("b") },
     ]);
+  });
+});
+
+describe("resumeOnBoot", () => {
+  const items = [
+    { id: "tg", title: "Telegram", updated: 900, foreign: true },
+    { id: "new", title: "Newest own", updated: 300 },
+    { id: "old", title: "Older own", updated: 100 },
+  ];
+  function bootState(active: string | null): AppState {
+    return { ...initialState(), sessionsLoaded: true, sessions: { items, active } };
+  }
+
+  it("lands in the conversation screen and switches to the bridge-active own session", () => {
+    const r = resumeOnBoot(bootState("old"), null);
+    expect(r.state.screen).toBe("session");
+    expect(r.state.phase).toBe("idle");
+    expect(r.state.sessions.active).toBe("old");
+    expect(r.state.history.loadingFor).toBe("old");
+    expect(r.state.stream).toEqual([]);
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("old") }]);
+  });
+  it("falls back to the persisted own session when the bridge active id is foreign", () => {
+    const r = resumeOnBoot(bootState("tg"), "old");
+    expect(r.state.sessions.active).toBe("old");
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("old") }]);
+  });
+  it("resumes the most recent own session when nothing usable is persisted", () => {
+    const r = resumeOnBoot(bootState(null), null);
+    expect(r.state.sessions.active).toBe("new");
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("new") }]);
+  });
+  it("creates exactly one new session when no own session exists", () => {
+    const r = resumeOnBoot(
+      {
+        ...initialState(),
+        sessionsLoaded: true,
+        sessions: { items: [{ id: "tg", title: "Telegram", updated: 9, foreign: true }], active: "tg" },
+      },
+      "tg",
+    );
+    expect(r.state.screen).toBe("session");
+    expect(r.state.sessions.active).toBeNull();
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
+  });
+  it("does not re-send the switch when the reconnect re-pin already loaded this session", () => {
+    const r = resumeOnBoot({ ...bootState("old"), history: { loadingFor: "old", failedFor: null, refresh: false } }, null);
+    expect(r.state.sessions.active).toBe("old");
+    expect(r.state.history.loadingFor).toBe("old");
+    expect(r.effects).toEqual([]);
+  });
+});
+
+describe("recoverUnavailableSession (F7)", () => {
+  const items = [
+    { id: "failed", title: "Failed", updated: 30 },
+    { id: "next", title: "Next newest own", updated: 20 },
+    { id: "older", title: "Older own", updated: 10 },
+    { id: "tg", title: "Telegram", updated: 99, foreign: true },
+  ];
+  function loading(failedId: string, alreadyFailed: string | null = null): AppState {
+    return {
+      ...initialState(),
+      screen: "session",
+      sessions: { items, active: failedId },
+      history: { loadingFor: failedId, failedFor: alreadyFailed, refresh: false },
+      stream: [{ kind: "user", text: "stale" }],
+    };
+  }
+
+  it("falls back to the most recent other own session and says why", () => {
+    const r = recoverUnavailableSession(loading("failed"), "failed");
+    expect(r.state.sessions.active).toBe("next");
+    expect(r.state.screen).toBe("session");
+    expect(r.state.history.failedFor).toBe("failed");
+    expect(r.state.history.loadingFor).toBe("next");
+    expect(r.state.stream).toEqual([]);
+    expect(r.state.notice).toBe("couldn't open that session");
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("next") }]);
+  });
+  it("a second, different failure goes straight to a fresh session (no ping-pong)", () => {
+    // "next" failed first (recorded in failedFor); now "failed" failed too —
+    // hopping to "older" would just invite a third switch into a bad list.
+    const r = recoverUnavailableSession(loading("failed", "next"), "failed", "next");
+    expect(r.state.sessions.active).toBeNull();
+    expect(r.state.expectingNewSession).toBe(true);
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
+  });
+  it("creates a new session when nothing own is left to fall back to", () => {
+    const onlyFailed = recoverUnavailableSession(
+      {
+        ...initialState(),
+        screen: "session",
+        sessions: { items: [{ id: "failed", title: "Only", updated: 1 }], active: "failed" },
+        history: { loadingFor: "failed", failedFor: null, refresh: false },
+      },
+      "failed",
+    );
+    expect(onlyFailed.state.sessions.active).toBeNull();
+    expect(onlyFailed.state.expectingNewSession).toBe(true);
+    expect(onlyFailed.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
   });
 });

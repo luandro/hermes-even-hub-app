@@ -1,4 +1,4 @@
-import type { HistoryItem, ServerMsg, SessionItem } from "../protocol";
+import type { HistoryItem, PromptOption, ServerMsg, SessionItem } from "../protocol";
 import { isKnownForeignSession, truncateTitle } from "../ui/session-list";
 
 /**
@@ -25,11 +25,44 @@ export const HINTS = {
   noticeOffline: "offline · reconnecting…",
   noticeOfflineIdle: "offline · check connection",
   noticeSessionOpenFailed: "couldn't open that session",
+  // A5: a tap on ＋New with nothing to open — the only way to a first session
+  // is the ＋New row highlighted + long-press (or double-tap).
+  hintNewSession: "long-press ＋New to start",
 } as const;
 
 export type Screen = "list" | "session";
 export type Phase = "idle" | "recording" | "transcribing" | "review";
 export type Turn = "idle" | "thinking" | "working";
+
+/** A pending `prompt.request` (§C). The queue is oldest-first; the head is the
+ *  active prompt, and `promptHighlight` is the highlighted option INDEX of the
+ *  head prompt. */
+export interface Prompt {
+  id: string;
+  kind: string;
+  title: string;
+  command: string;
+  description: string;
+  options: PromptOption[];
+  timeout_s: number;
+  timeout_choice: string | null;
+}
+
+/** Index of the default option — the initial and reset highlight (A11). */
+export function defaultOptionIndex(p: Prompt): number {
+  return Math.max(0, p.options.findIndex((o) => o.default === true));
+}
+
+/** Highlight resets to the default whenever the head prompt changes (§C rule 8). */
+function withPromptQueue(s: AppState, prompts: Prompt[]): AppState {
+  const prevHead = s.prompts[0]?.id;
+  const head = prompts[0]?.id;
+  return {
+    ...s,
+    prompts,
+    promptHighlight: head !== prevHead && prompts.length ? defaultOptionIndex(prompts[0]) : s.promptHighlight,
+  };
+}
 
 export type StreamItem = HistoryItem;
 
@@ -53,6 +86,10 @@ export interface AppState {
   turn: Turn;
   scrollPage: number | null; // null = follow latest viewport; number = measured viewport index (held)
   notice: string | null;
+  /** Pending prompts, oldest first; prompts[0] is the active one (§C rule 8). */
+  prompts: Prompt[];
+  /** Highlighted option index within prompts[0]. */
+  promptHighlight: number;
   readonlyNoHistory?: boolean;
   /** We sent sessions.new and haven't adopted the bridge-assigned id yet. */
   expectingNewSession: boolean;
@@ -73,6 +110,8 @@ export function initialState(): AppState {
     turn: "idle",
     scrollPage: null,
     notice: null,
+    prompts: [],
+    promptHighlight: 0,
     readonlyNoHistory: false,
     expectingNewSession: false,
     unconfirmedOwnId: null,
@@ -138,12 +177,16 @@ function truncateNotice(text: string): string {
 
 export function reduce(s: AppState, m: ServerMsg): AppState {
   switch (m.t) {
-    case "hello.ok":
+    case "hello.ok": {
+      // A fresh hello.ok is a (re)connect: queued prompts died with the old
+      // bridge process (§C rule 8), so they clear on every path below.
+      const reset = { ...s, prompts: [] as Prompt[], promptHighlight: 0 };
       // A reconnect must not move the wearer out of their conversation: the
       // local active id wins; the connection layer re-pins it bridge-side.
-      if (s.sessions.active) return s;
-      if (!m.active || isKnownForeignSession(s.sessions.items, m.active)) return s;
-      return { ...s, sessions: { ...s.sessions, active: m.active } };
+      if (s.sessions.active) return reset;
+      if (!m.active || isKnownForeignSession(s.sessions.items, m.active)) return reset;
+      return { ...reset, sessions: { ...s.sessions, active: m.active } };
+    }
     case "sessions": {
       const keepActive =
         isHistoryLoading(s)
@@ -230,6 +273,26 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
       return { ...s, stream: patchTool(s.stream, m.name, m.ok) };
     case "turn.done":
       return { ...s, turn: "idle" };
+    case "prompt.request": {
+      if (s.prompts.some((p) => p.id === m.id)) return s; // dedupe by id
+      const prompt: Prompt = {
+        id: m.id,
+        kind: m.kind,
+        title: m.title,
+        command: m.command,
+        description: m.description,
+        options: m.options,
+        timeout_s: m.timeout_s,
+        timeout_choice: m.timeout_choice,
+      };
+      // A prompt switches to the session screen without changing the active
+      // session or the phase (§C rule 8, A6).
+      return { ...withPromptQueue(s, [...s.prompts, prompt]), screen: "session" };
+    }
+    case "prompt.resolved": {
+      if (!s.prompts.some((p) => p.id === m.id)) return s; // no-op when absent
+      return withPromptQueue(s, s.prompts.filter((p) => p.id !== m.id));
+    }
     case "notice":
       return { ...s, notice: m.text };
     case "ack":
@@ -303,7 +366,9 @@ export function offlineNotice(conn: string): string {
  *  mark every in-flight turn uncertain — nothing can be delivered now. */
 export function applyDisconnected(s: AppState): AppState {
   const phase: Phase = s.phase === "recording" || s.phase === "transcribing" ? "idle" : s.phase;
-  return markDeliveryUncertain({ ...s, phase });
+  // Prompts die with the socket (§C rule 8): the bridge resets its queue on
+  // reconnect, and a stale panel would answer a dead question.
+  return markDeliveryUncertain({ ...s, phase, prompts: [], promptHighlight: 0 });
 }
 
 export function connDot(conn: string): string {

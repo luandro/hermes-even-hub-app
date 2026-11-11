@@ -1,5 +1,5 @@
 import type { EvenAppBridge } from "@evenrealities/even_hub_sdk";
-import type { AppState, StreamItem } from "../state/store";
+import type { AppState, Prompt, StreamItem } from "../state/store";
 import { HINTS, barText, connDot, isHistoryLoading } from "../state/store";
 import { IDS, setText, showListPage, showLoadingPage } from "./render";
 import {
@@ -9,7 +9,12 @@ import {
   listableSessions,
   truncateTitle,
 } from "./session-list";
-import { currentThreadViewport } from "./stream";
+import {
+  THREAD_BODY_INNER_WIDTH,
+  THREAD_VIEWPORT_LINES,
+  currentThreadViewport,
+  wrapTextLines,
+} from "./stream";
 
 export function truncateRow(title: string): string {
   return truncateTitle(title);
@@ -65,7 +70,59 @@ export function loadingText(s: AppState): string {
   return `loading sessions...\n${status}`;
 }
 
+/** Command lines, capped at `maxLines`, width-fit with an ellipsis (A6/A11). */
+function commandLines(command: string, maxLines: number): string[] {
+  if (!command) return [];
+  const wrapped = wrapTextLines(command, THREAD_BODY_INNER_WIDTH);
+  if (wrapped.length <= maxLines) return wrapped;
+  // Shrink with a trailing ellipsis until it fits the line budget.
+  let text = `${command}…`;
+  while (text.length > 2 && wrapTextLines(text, THREAD_BODY_INNER_WIDTH).length > maxLines) {
+    text = `${text.slice(0, -2)}…`;
+  }
+  return wrapTextLines(text, THREAD_BODY_INNER_WIDTH);
+}
+
+/**
+ * The prompt panel body (A6): the command on top (≤2 lines), then the options
+ * in wire order with a `>` marker on the highlighted one. With 6 options the
+ * command shrinks to one line so the whole panel fits the 7-line viewport.
+ * Labels are defensively truncated at 24 (A11).
+ */
+export function promptBody(p: Prompt, highlight: number): string {
+  const maxCommand = p.options.length >= THREAD_VIEWPORT_LINES - 1 ? 1 : 2;
+  const command = commandLines(p.command, maxCommand);
+  const options = p.options.map((o, i) =>
+    `${i === highlight ? "> " : "  "}${o.label.slice(0, 24)}`);
+  return [...command, ...options].join("\n");
+}
+
+/** The prompt panel hint (A6), shown in the status container. */
+export function promptHint(p: Prompt): string {
+  const def = p.options.find((o) => o.default === true)?.label
+    ?? p.options[0]?.label ?? "";
+  const base = `scroll=choose · tap=ok · 2×tap=${def}`;
+  if (p.timeout_s > 0 && p.timeout_choice) {
+    const label = p.options.find((o) => o.id === p.timeout_choice)?.label ?? p.timeout_choice;
+    return `${base} · auto ${label} ${p.timeout_s}s`;
+  }
+  return `${base} · no answer = no`;
+}
+
 export async function renderSession(bridge: EvenAppBridge, s: AppState): Promise<void> {
+  // A prompt takes over the session screen (A6): title in the header, command
+  // + options in the body, the gesture hint (+N queued) in the status bar.
+  // The active session and phase are untouched.
+  if (s.prompts.length > 0) {
+    const p = s.prompts[0];
+    const queued = s.prompts.length > 1 ? ` · +${s.prompts.length - 1}` : "";
+    await setText(bridge, IDS.header, p.title);
+    await setText(bridge, IDS.dot, connDot(s.conn));
+    await setText(bridge, IDS.body, promptBody(p, s.promptHighlight));
+    await setText(bridge, IDS.status, truncateTitle(promptHint(p) + queued, 576, 64));
+    return;
+  }
+
   const active = s.sessions.items.find((i) => i.id === s.sessions.active);
   const rawTitle = active?.title.trim() ?? "";
   await setText(bridge, IDS.header, headerTitle(rawTitle, s));

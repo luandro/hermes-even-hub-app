@@ -1,9 +1,9 @@
-import { HINTS, offlineNotice, type AppState, type StreamItem } from "../state/store";
-import { sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../protocol";
-import { isOwnSession, listableSessions, pickResumeSession, sessionForListIndex } from "../ui/session-list";
+import { HINTS, defaultOptionIndex, offlineNotice, type AppState, type StreamItem } from "../state/store";
+import { promptResponse, sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../protocol";
+import { isOwnSession, isKnownOwnSession, listableSessions, pickResumeSession, sessionForListIndex } from "../ui/session-list";
 import { nextThreadViewportCursor, previousThreadViewportIndex } from "../ui/stream";
 
-export type Gesture = "click" | "doubleClick" | "scrollUp" | "scrollDown";
+export type Gesture = "click" | "doubleClick" | "longPress" | "scrollUp" | "scrollDown";
 
 export type Effect =
   | { kind: "send"; frame: string }
@@ -105,6 +105,31 @@ export interface ListSnapshot {
   ids: (string | null)[];
 }
 
+/** ＋New highlighted + long-press/double-tap: exactly one sessions.new (A3). */
+const startNewSession = (s: AppState): DispatchResult => ({
+  state: enterSession(s, null, { newSession: true }),
+  effects: [{ kind: "send", frame: sessionsNew() }],
+});
+
+/**
+ * A1: a plain tap on ＋New (or with no row info) opens the CURRENT own
+ * session — a switch, never a new session. "Current" is the active session
+ * when it is ours (or the one we just created), else the newest own session.
+ * With no own session at all there is nothing to switch to: show the hint
+ * (A5) and send nothing.
+ */
+function openCurrent(s: AppState): DispatchResult {
+  const active = s.sessions.active;
+  const currentIsOurs = Boolean(
+    active && (isKnownOwnSession(s.sessions.items, active) || active === s.unconfirmedOwnId),
+  );
+  const id = currentIsOurs ? active : listableSessions(s.sessions.items)[0]?.id ?? null;
+  if (!id) {
+    return { state: { ...s, notice: HINTS.hintNewSession }, effects: [] };
+  }
+  return { state: enterSession(s, id), effects: [{ kind: "send", frame: sessionsSwitch(id) }] };
+}
+
 export function dispatch(
   s: AppState,
   g: Gesture,
@@ -114,16 +139,25 @@ export function dispatch(
 ): DispatchResult {
   if (s.notice) s = { ...s, notice: null };
   if (s.screen === "list") {
-    // Exit must work even while sessions are still loading.
-    if (g === "doubleClick") return { state: s, effects: [{ kind: "exit" }] };
+    // Exit must work even while sessions are still loading (A4). ＋New
+    // highlighted (row 0) with a loaded list starts a session instead (A3);
+    // creating one before the list hydrates would race the boot resume.
+    if (g === "doubleClick") {
+      if (s.sessionsLoaded && index === 0) return startNewSession(s);
+      return { state: s, effects: [{ kind: "exit" }] };
+    }
     if (!s.sessionsLoaded) return { state: s, effects: [] };
+    if (g === "longPress") {
+      // A3 requires ＋New highlighted; a stray long-press with no row info
+      // must not mint sessions (the duplicate-session bug class).
+      if (index === 0) return startNewSession(s);
+      return { state: s, effects: [] };
+    }
     if (g === "click") {
-      const i = index ?? 0; // proto3 omits index 0 → undefined means the ＋New row
+      const i = index ?? 0; // no row info ≡ ＋New (proto3 omits index 0)
+      if (i < 0) return { state: s, effects: [] }; // ambiguous row name: ignored
       if (i === 0) {
-        return {
-          state: enterSession(s, null, { newSession: true }),
-          effects: [{ kind: "send", frame: sessionsNew() }],
-        };
+        return openCurrent(s);
       }
       // Falls back to live state when no snapshot is supplied, so existing
       // callers keep their current behaviour.
@@ -162,6 +196,40 @@ export function dispatch(
   const canSpeak = activeSessionItem
     ? isOwnSession(activeSessionItem)
     : s.sessions.active == null || s.sessions.active === s.unconfirmedOwnId;
+
+  // Prompt gate (§C): while a prompt is queued and the phase lets the wearer
+  // answer, gestures drive the prompt panel instead of the conversation.
+  // Outside idle/review gestures keep their meaning and the panel stays (A8).
+  if (s.prompts.length > 0 && (s.phase === "idle" || s.phase === "review")) {
+    const p = s.prompts[0];
+    const n = p.options.length;
+    if (g === "scrollUp" || g === "scrollDown") {
+      const next = Math.min(Math.max(s.promptHighlight + (g === "scrollUp" ? -1 : 1), 0), n - 1);
+      return next === s.promptHighlight
+        ? { state: s, effects: [] }
+        : { state: { ...s, promptHighlight: next }, effects: [] };
+    }
+    if (g === "click" || g === "doubleClick") {
+      // A tap confirms the highlighted option; a double-tap the default.
+      // The answer is always an offered id (A12) and removes the prompt
+      // locally (§C rule 8), resetting the highlight to the next head's
+      // default.
+      const idx = g === "doubleClick"
+        ? defaultOptionIndex(p)
+        : Math.min(Math.max(s.promptHighlight, 0), n - 1);
+      const prompts = s.prompts.slice(1);
+      return {
+        state: {
+          ...s,
+          prompts,
+          promptHighlight: prompts.length ? defaultOptionIndex(prompts[0]) : 0,
+        },
+        effects: [{ kind: "send", frame: promptResponse(p.id, p.options[idx].id) }],
+      };
+    }
+    // long-press is ignored while the gate is active.
+    return { state: s, effects: [] };
+  }
 
   if (s.phase === "idle") {
     if (g === "click") {

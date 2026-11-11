@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { applyServerMessage, type ConnectionFlags } from "../src/state/connection";
-import { initialState, applyDisconnected, type AppState } from "../src/state/store";
+import { initialState, applyDisconnected, reduce, type AppState } from "../src/state/store";
 import { sessionsList, sessionsNew, sessionsSwitch } from "../src/protocol";
 
 const freshFlags = (): ConnectionFlags => ({ helloOk: false, bootResumeDone: false });
@@ -260,5 +260,50 @@ describe("applyServerMessage: refused resume recovers (F7)", () => {
     expect(r.state.sessions.active).toBe("a");
     expect(r.effects).toEqual([]);
     expect(r.state.notice).toContain("turn rejected");
+  });
+});
+
+describe("applyServerMessage / applyDisconnected: prompts clear on reconnect and drop (§C rule 8)", () => {
+  function withPrompt(): AppState {
+    // A prompt.request lands mid-conversation.
+    return reduce(
+      {
+        ...initialState(),
+        screen: "session",
+        sessions: { items: [own("mine", 3)], active: "mine" },
+        stream: [{ kind: "user", text: "hi" }],
+      },
+      {
+        t: "prompt.request",
+        id: "p1",
+        kind: "exec_approval",
+        title: "Approve?",
+        command: "rm -rf /tmp/x",
+        description: "shell",
+        options: [
+          { id: "once", label: "Approve once", style: "primary" },
+          { id: "deny", label: "Deny", style: "danger", default: true },
+        ],
+        timeout_s: 0,
+        timeout_choice: null,
+      },
+    );
+  }
+
+  it("a new hello.ok clears the queued prompt (mid-conversation, re-pin path)", () => {
+    const s = withPrompt();
+    expect(s.prompts.map((p) => p.id)).toEqual(["p1"]); // fixture sanity
+    const r = applyServerMessage(s, { t: "hello.ok", caps: {}, active: "" }, freshFlags(), null);
+    expect(r.state.prompts).toEqual([]);
+    expect(r.state.promptHighlight).toBe(0);
+    // The re-pin still fires: the conversation survives, the prompt doesn't.
+    expect(r.effects).toContainEqual({ kind: "send", frame: sessionsList() });
+  });
+
+  it("a disconnect clears the queued prompt", () => {
+    const s = withPrompt();
+    const next = applyDisconnected(s);
+    expect(next.prompts).toEqual([]);
+    expect(next.promptHighlight).toBe(0);
   });
 });

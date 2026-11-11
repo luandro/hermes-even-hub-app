@@ -19,6 +19,111 @@ describe("initialState", () => {
   });
 });
 
+describe("reduce: prompts", () => {
+  const request = (id: string, overrides: Record<string, unknown> = {}) => ({
+    t: "prompt.request" as const,
+    id,
+    kind: "exec_approval",
+    title: "Approve?",
+    command: "rm -rf /tmp/x",
+    description: "shell",
+    options: [
+      { id: "once", label: "Approve once", style: "primary" as const },
+      { id: "deny", label: "Deny", style: "danger" as const, default: true },
+    ],
+    timeout_s: 0,
+    timeout_choice: null,
+    ...overrides,
+  });
+
+  it("queues a prompt.request oldest-first and forces the session screen without touching session or phase", () => {
+    const s: AppState = {
+      ...initialState(),
+      sessionsLoaded: true,
+      screen: "list",
+      phase: "idle",
+      sessions: { items: [{ id: "own-1", title: "A", updated: 1 }], active: "own-1" },
+    };
+    const withPrompt = reduce(s, request("p1"));
+    expect(withPrompt.screen).toBe("session");
+    expect(withPrompt.phase).toBe("idle");
+    expect(withPrompt.sessions.active).toBe("own-1");
+    expect(withPrompt.prompts.map((p) => p.id)).toEqual(["p1"]);
+
+    const two = reduce(withPrompt, request("p2"));
+    expect(two.prompts.map((p) => p.id)).toEqual(["p1", "p2"]); // head (oldest) first
+  });
+
+  it("dedupes a prompt.request by id", () => {
+    const s = reduce(initialState(), request("p1"));
+    const again = reduce(s, request("p1"));
+    expect(again).toBe(s); // no second entry, no state change
+  });
+
+  it("sets the initial highlight on the default option, even when it is not first", () => {
+    const s = reduce(initialState(), request("p1"));
+    expect(s.promptHighlight).toBe(1); // deny (default) is options[1]
+  });
+
+  it("prompt.resolved removes by id; a head change resets the highlight to the new head's default", () => {
+    // p1: default at index 1 (deny). p2: default at index 0.
+    const p2 = request("p2", {
+      options: [
+        { id: "yes", label: "Yes", style: "primary", default: true },
+        { id: "no", label: "No", style: "danger" },
+      ],
+    });
+    let s = reduce(initialState(), request("p1"));
+    s = reduce(s, p2);
+    expect(s.prompts.map((p) => p.id)).toEqual(["p1", "p2"]);
+    expect(s.promptHighlight).toBe(1); // p1 (head) default
+
+    // Scroll p1 to index 0, then remove p1 (the head) via a resolved frame.
+    s = { ...s, promptHighlight: 0 };
+    s = reduce(s, { t: "prompt.resolved", id: "p1", choice: "none", by: "other" });
+    expect(s.prompts.map((p) => p.id)).toEqual(["p2"]);
+    expect(s.promptHighlight).toBe(0); // p2's default is at index 0
+
+    // Removing a NON-head prompt keeps the head's highlight.
+    s = reduce(s, request("p3"));
+    s = { ...s, promptHighlight: 1 };
+    s = reduce(s, { t: "prompt.resolved", id: "p3", choice: "none", by: "other" });
+    expect(s.promptHighlight).toBe(1);
+
+    // A resolved for an unknown id is a no-op.
+    const before = s;
+    expect(reduce(s, { t: "prompt.resolved", id: "zzz", choice: "none", by: "other" })).toBe(before);
+  });
+
+  it("turn.done leaves the prompt queue alone", () => {
+    let s = reduce(initialState(), request("p1"));
+    s = reduce(s, { t: "turn.done" });
+    expect(s.prompts.map((p) => p.id)).toEqual(["p1"]);
+    expect(s.turn).toBe("idle");
+  });
+
+  it("a new hello.ok clears the prompt queue (even mid-conversation)", () => {
+    let s: AppState = {
+      ...initialState(),
+      screen: "session",
+      sessions: { items: [{ id: "a", title: "A", updated: 1 }], active: "a" },
+    };
+    s = reduce(s, request("p1"));
+    s = { ...s, promptHighlight: 1 };
+    const next = reduce(s, { t: "hello.ok", caps: {}, active: "a" });
+    expect(next.prompts).toEqual([]);
+    expect(next.promptHighlight).toBe(0);
+  });
+
+  it("a disconnect clears the prompt queue", () => {
+    let s = reduce(initialState(), request("p1"));
+    s = { ...s, promptHighlight: 1, screen: "session" };
+    const next = applyDisconnected(s);
+    expect(next.prompts).toEqual([]);
+    expect(next.promptHighlight).toBe(0);
+  });
+});
+
 describe("reduce: sessions", () => {
   it("sets items and active from a sessions message", () => {
     const s: AppState = initialState();

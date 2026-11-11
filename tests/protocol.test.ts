@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hello, parseServer, audioStart, audioStop } from "../src/protocol";
+import { hello, parseServer, audioStart, audioStop, promptResponse } from "../src/protocol";
 
 describe("protocol", () => {
   it("builds a hello frame", () => {
@@ -61,6 +61,100 @@ describe("protocol", () => {
     const { textMsg } = await import("../src/protocol");
     expect(JSON.parse(textMsg("hello"))).toEqual({ t: "text", text: "hello" });
     expect(JSON.parse(textMsg("hello", "tx-123"))).toEqual({ t: "text", text: "hello", id: "tx-123" });
+  });
+  it("parses a valid prompt.request frame (default not first, timeout 0 ⇒ null)", () => {
+    const raw = JSON.stringify({
+      t: "prompt.request",
+      id: "req-1",
+      kind: "exec_approval",
+      title: "Approve?",
+      command: "rm -rf /tmp/x",
+      description: "shell",
+      options: [
+        { id: "once", label: "Approve once", style: "primary" },
+        { id: "deny", label: "Deny", style: "danger", default: true },
+      ],
+      timeout_s: 0,
+      timeout_choice: null,
+    });
+    const msg = parseServer(raw);
+    expect(msg).toEqual({
+      t: "prompt.request",
+      id: "req-1",
+      kind: "exec_approval",
+      title: "Approve?",
+      command: "rm -rf /tmp/x",
+      description: "shell",
+      options: [
+        { id: "once", label: "Approve once", style: "primary" },
+        { id: "deny", label: "Deny", style: "danger", default: true },
+      ],
+      timeout_s: 0,
+      timeout_choice: null,
+    });
+  });
+  it("parses prompt.resolved frames including none/other", () => {
+    expect(parseServer(JSON.stringify({ t: "prompt.resolved", id: "r1", choice: "deny", by: "user" })))
+      .toEqual({ t: "prompt.resolved", id: "r1", choice: "deny", by: "user" });
+    expect(parseServer(JSON.stringify({ t: "prompt.resolved", id: "r1", choice: "none", by: "other" })))
+      .toEqual({ t: "prompt.resolved", id: "r1", choice: "none", by: "other" });
+    expect(parseServer(JSON.stringify({ t: "prompt.resolved", id: "r1", choice: "once", by: "timeout" })))
+      .toEqual({ t: "prompt.resolved", id: "r1", choice: "once", by: "timeout" });
+  });
+  it("rejects A13/§C bad prompt.request shapes at parse", () => {
+    const valid = {
+      t: "prompt.request",
+      id: "req-1",
+      kind: "exec_approval",
+      title: "Approve?",
+      command: "rm -rf /tmp/x",
+      description: "shell",
+      options: [
+        { id: "once", label: "Approve once", style: "primary" },
+        { id: "deny", label: "Deny", style: "danger", default: true },
+      ],
+      timeout_s: 0,
+      timeout_choice: null,
+    };
+    const bad: unknown[] = [
+      { ...valid, kind: "clarify" },                      // unknown kind (phase 2 reserved)
+      { ...valid, options: [valid.options[1]] },          // < 2 options
+      { ...valid, options: [...Array.from({ length: 7 }, (_, i) => ({ id: `o${i}`, label: `o${i}`, style: "", ...(i === 0 ? { default: true } : {}) }))] }, // > 6 options
+      { ...valid, options: [{ id: "deny", label: "Deny", style: "danger", default: true }, { id: "deny", label: "Deny2", style: "" }] }, // duplicate id
+      { ...valid, options: [valid.options[0], { ...valid.options[1], default: false }] }, // default count 0
+      { ...valid, options: [...valid.options, { ...valid.options[0], id: "x", default: true }] }, // default count 2
+      { ...valid, timeout_s: 15, timeout_choice: "nope" }, // timeout_choice not an option id
+      { ...valid, timeout_s: 15, timeout_choice: null },   // timeout_s > 0 needs a choice
+      { ...valid, timeout_s: 0, timeout_choice: "once" },  // timeout_s 0 ⇒ choice null
+      { ...valid, id: "" },                                // id not 1–128
+      { ...valid, id: "x".repeat(129) },
+      { ...valid, title: "t".repeat(25) },                 // title ≤ 24
+      { ...valid, options: [{ id: "none", label: "None", style: "", default: true }, valid.options[0]] }, // "none" forbidden
+      { ...valid, options: [{ id: "Bad Id", label: "x", style: "", default: true }, valid.options[0]] }, // id pattern
+      { ...valid, options: [{ id: "a", label: "", style: "", default: true }, valid.options[0]] }, // label 1–24
+      { ...valid, options: [{ id: "a", label: "x".repeat(25), style: "", default: true }, valid.options[0]] },
+      { ...valid, options: [{ id: "a", label: "x", style: "wild", default: true }, valid.options[0]] }, // style enum
+      { ...valid, timeout_s: -1 },
+      { ...valid, timeout_s: 1.5 },                        // integer ≥ 0
+    ];
+    for (const frame of bad) {
+      expect(() => parseServer(JSON.stringify(frame)), JSON.stringify(frame)).toThrow();
+    }
+  });
+  it("rejects bad prompt.resolved shapes at parse", () => {
+    const bad = [
+      { t: "prompt.resolved", id: "", choice: "deny", by: "user" },
+      { t: "prompt.resolved", id: "r", choice: "Deny", by: "user" },   // uppercase ≠ option pattern
+      { t: "prompt.resolved", id: "r", choice: "", by: "other" },
+      { t: "prompt.resolved", id: "r", choice: "deny", by: "agent" },  // by enum
+    ];
+    for (const frame of bad) {
+      expect(() => parseServer(JSON.stringify(frame)), JSON.stringify(frame)).toThrow();
+    }
+  });
+  it("builds a prompt.response frame", () => {
+    expect(JSON.parse(promptResponse("req-1", "deny")))
+      .toEqual({ t: "prompt.response", id: "req-1", choice: "deny" });
   });
   it("parses an ack frame", () => {
     const rawOk = JSON.stringify({ t: "ack", id: "msg-1", ok: true });

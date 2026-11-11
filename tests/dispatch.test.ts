@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { dispatch, resumeOnBoot, recoverUnavailableSession } from "../src/input/dispatch";
-import { initialState, reduce, type AppState } from "../src/state/store";
-import { sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../src/protocol";
+import { initialState, reduce, type AppState, type Prompt } from "../src/state/store";
+import { sessionsNew, sessionsSwitch, textMsg, sessionsList, promptResponse } from "../src/protocol";
 import { threadPages } from "../src/ui/stream";
 import { buildListView } from "../src/ui/views";
 
@@ -25,12 +25,67 @@ describe("dispatch: list", () => {
     expect(r.state.screen).toBe("list");
   });
 
-  it("index 0 (or undefined) creates + opens a new session", () => {
-    const r = dispatch(listWith([{ id: "a", title: "A" }]), "click", undefined);
-    expect(r.state.screen).toBe("session");
-    expect(r.state.phase).toBe("idle");
-    expect(r.state.stream).toEqual([]);
-    expect(r.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
+  it("A1: a tap with no row info or on ＋New opens the current own session (switch, never new)", () => {
+    const s = listWith([
+      { id: "a", title: "A", updated: 1 },
+      { id: "b", title: "B", updated: 2 },
+    ]);
+    for (const index of [undefined, 0]) {
+      const r = dispatch(s, "click", index);
+      expect(r.state.screen).toBe("session");
+      expect(r.state.sessions.active).toBe("b"); // newest own when nothing is active
+      expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("b") }]);
+    }
+  });
+  it("A1: the active own session is the current one, even when it is not the newest", () => {
+    const s: AppState = {
+      ...listWith([{ id: "a", title: "A", updated: 1 }, { id: "b", title: "B", updated: 2 }]),
+      sessions: {
+        items: [
+          { id: "a", title: "A", updated: 1 },
+          { id: "b", title: "B", updated: 2 },
+        ],
+        active: "a",
+      },
+    };
+    const r = dispatch(s, "click", 0);
+    expect(r.state.sessions.active).toBe("a");
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("a") }]);
+  });
+  it("A1: a foreign active session falls back to the newest own", () => {
+    const s: AppState = {
+      ...listWith([{ id: "a", title: "A", updated: 1 }]),
+      sessions: {
+        items: [
+          { id: "tg", title: "Telegram", updated: 9, foreign: true },
+          { id: "a", title: "A", updated: 1 },
+        ],
+        active: "tg",
+      },
+    };
+    const r = dispatch(s, "click", undefined);
+    expect(r.state.sessions.active).toBe("a");
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("a") }]);
+  });
+  it("A1: the just-created session (unconfirmedOwnId) is the current one", () => {
+    const s: AppState = {
+      ...listWith([{ id: "old", title: "Old", updated: 5 }]),
+      unconfirmedOwnId: "fresh-9",
+      sessions: { items: [{ id: "old", title: "Old", updated: 5 }], active: "fresh-9" },
+    };
+    const r = dispatch(s, "click", 0);
+    expect(r.state.sessions.active).toBe("fresh-9");
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("fresh-9") }]);
+  });
+  it("A5: a tap with no own session shows the long-press ＋New hint and sends nothing", () => {
+    const s = listWith([
+      { id: "tg", title: "Telegram", foreign: true },
+      { id: "ro", title: "Readonly", read_only: true },
+    ]);
+    const r = dispatch(s, "click", 0);
+    expect(r.state.screen).toBe("list");
+    expect(r.state.notice).toBe("long-press ＋New to start");
+    expect(r.effects).toEqual([]);
   });
   it("index 1 opens the first existing session", () => {
     const r = dispatch(listWith([{ id: "a", title: "A" }, { id: "b", title: "B" }]), "click", 1);
@@ -131,6 +186,28 @@ describe("dispatch: list", () => {
     expect(r.effects).toEqual([{ kind: "exit" }]);
     expect(r.state.screen).toBe("list");
   });
+  it("A3: long-press with ＋New highlighted sends exactly one sessions.new", () => {
+    const r = dispatch(listWith([{ id: "a", title: "A" }]), "longPress", 0);
+    expect(r.state.screen).toBe("session");
+    expect(r.state.expectingNewSession).toBe(true);
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
+  });
+  it("A3 ruling: long-press with no row info is a no-op (a stray long-press must not mint sessions)", () => {
+    const r = dispatch(listWith([{ id: "a", title: "A" }]), "longPress", undefined);
+    expect(r.state.screen).toBe("list");
+    expect(r.effects).toEqual([]);
+    expect(r.state.expectingNewSession).toBe(false);
+  });
+  it("A3: double-tap with ＋New highlighted sends exactly one sessions.new", () => {
+    const r = dispatch(listWith([{ id: "a", title: "A" }]), "doubleClick", 0);
+    expect(r.state.expectingNewSession).toBe(true);
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
+  });
+  it("A4: double-tap with no row info or on a session row exits, even while loading", () => {
+    expect(dispatch(listWith([{ id: "a", title: "A" }]), "doubleClick", 1).effects).toEqual([{ kind: "exit" }]);
+    expect(dispatch(listWith([{ id: "a", title: "A" }]), "doubleClick", undefined).effects).toEqual([{ kind: "exit" }]);
+    expect(dispatch(initialState(), "doubleClick", 0).effects).toEqual([{ kind: "exit" }]);
+  });
   it("scroll is a no-op on the list", () => {
     const r = dispatch(listWith([{ id: "a", title: "A" }]), "scrollUp");
     expect(r.effects).toEqual([]);
@@ -171,8 +248,8 @@ describe("dispatch: list", () => {
     expect(r.state.sessions.active).toBe("a");
     expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("a") }]);
   });
-  it("the +New row arms the just-created-session claim so the next active frame is ours (F3)", () => {
-    const r = dispatch(listWith([]), "click", 0);
+  it("the +New gesture arms the just-created-session claim so the next active frame is ours (F3)", () => {
+    const r = dispatch(listWith([]), "longPress", 0);
     expect(r.state.expectingNewSession).toBe(true);
     const claimed = reduce(r.state, { t: "active", id: "fresh-9" });
     expect(claimed.unconfirmedOwnId).toBe("fresh-9");
@@ -182,6 +259,122 @@ describe("dispatch: list", () => {
 function session(phase: AppState["phase"]): AppState {
   return { ...initialState(), screen: "session", phase, conn: "connected" };
 }
+
+function prompt(overrides?: Partial<Prompt>): Prompt {
+  return {
+    id: "p1",
+    kind: "exec_approval",
+    title: "Approve?",
+    command: "rm -rf /tmp/x",
+    description: "shell",
+    options: [
+      { id: "once", label: "Approve once", style: "primary" },
+      { id: "deny", label: "Deny", style: "danger", default: true },
+    ],
+    timeout_s: 0,
+    timeout_choice: null,
+    ...overrides,
+  };
+}
+
+function gated(overrides?: Partial<AppState>): AppState {
+  return {
+    ...session("idle"),
+    prompts: [prompt()],
+    promptHighlight: 1, // deny, the default
+    ...overrides,
+  };
+}
+
+describe("dispatch: prompt gate (A7/A12)", () => {
+  it("scroll moves the highlight, clamped at both ends", () => {
+    const r1 = dispatch(gated(), "scrollUp");
+    expect(r1.state.promptHighlight).toBe(0);
+    expect(r1.state.scrollPage).toBeNull();
+    const r2 = dispatch(r1.state, "scrollUp");
+    expect(r2.state.promptHighlight).toBe(0); // clamped
+    const r3 = dispatch(r1.state, "scrollDown");
+    expect(r3.state.promptHighlight).toBe(1);
+    const r4 = dispatch(r3.state, "scrollDown");
+    expect(r4.state.promptHighlight).toBe(1); // clamped at n-1
+    expect(r4.effects).toEqual([]);
+  });
+
+  it("a tap answers the highlighted option and removes the prompt locally", () => {
+    const r = dispatch(gated(), "click");
+    expect(r.effects).toEqual([{ kind: "send", frame: promptResponse("p1", "deny") }]);
+    expect(r.state.prompts).toEqual([]);
+    expect(r.state.promptHighlight).toBe(0);
+    const r0 = dispatch({ ...gated(), promptHighlight: 0 }, "click");
+    expect(r0.effects).toEqual([{ kind: "send", frame: promptResponse("p1", "once") }]);
+  });
+
+  it("a double-tap answers the default option immediately, wherever the highlight is", () => {
+    const r = dispatch({ ...gated(), promptHighlight: 0 }, "doubleClick");
+    expect(r.effects).toEqual([{ kind: "send", frame: promptResponse("p1", "deny") }]);
+    expect(r.state.prompts).toEqual([]);
+  });
+
+  it("long-press does nothing while the gate is active", () => {
+    const r = dispatch(gated(), "longPress");
+    expect(r.effects).toEqual([]);
+    expect(r.state.prompts.map((p) => p.id)).toEqual(["p1"]);
+    expect(r.state.screen).toBe("session");
+  });
+
+  it("answering the head reveals the next prompt and resets the highlight to its default", () => {
+    const s = gated({
+      prompts: [prompt(), prompt({
+        id: "p2",
+        options: [
+          { id: "edit", label: "Edit first", style: "" },
+          { id: "run", label: "Run", style: "primary", default: true },
+        ],
+      })],
+    });
+    const r = dispatch(s, "click"); // answers p1 (deny)
+    expect(r.effects).toEqual([{ kind: "send", frame: promptResponse("p1", "deny") }]);
+    expect(r.state.prompts.map((p) => p.id)).toEqual(["p2"]);
+    expect(r.state.promptHighlight).toBe(1); // p2's default ("run")
+  });
+
+  it("the gate is off outside idle/review: gestures keep their meaning and the panel stays", () => {
+    const r = dispatch(gated({ phase: "recording" }), "click");
+    expect(r.state.phase).toBe("transcribing");
+    expect(r.effects).toEqual([{ kind: "stopMic" }]);
+    expect(r.state.prompts.map((p) => p.id)).toEqual(["p1"]);
+  });
+
+  it("in review the gate takes the tap: the transcript stays pending", () => {
+    const s = gated({ phase: "review", pending: { transcript: "hello" } });
+    const r = dispatch(s, "click");
+    expect(r.effects).toEqual([{ kind: "send", frame: promptResponse("p1", "deny") }]);
+    expect(r.state.pending).toEqual({ transcript: "hello" });
+    expect(r.state.prompts).toEqual([]);
+  });
+
+  it("A12: every answer is one of the offered option ids", () => {
+    const p = prompt({
+      id: "px",
+      options: [
+        { id: "once", label: "Approve once", style: "primary" },
+        { id: "later", label: "Ask again later", style: "" },
+        { id: "deny", label: "Deny", style: "danger", default: true },
+      ],
+    });
+    const ids = p.options.map((o) => o.id);
+    for (let h = 0; h < p.options.length; h++) {
+      for (const g of ["click", "doubleClick"] as const) {
+        const r = dispatch(gated({ prompts: [p], promptHighlight: h }), g);
+        const sends = r.effects.filter((e) => e.kind === "send");
+        expect(sends).toHaveLength(1);
+        const frame = JSON.parse((sends[0] as { kind: "send"; frame: string }).frame);
+        expect(frame.t).toBe("prompt.response");
+        expect(ids).toContain(frame.choice);
+      }
+    }
+  });
+});
 
 describe("dispatch: session idle", () => {
   it("tap starts recording", () => {

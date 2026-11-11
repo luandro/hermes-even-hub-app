@@ -7,6 +7,7 @@ function makeActions(): InputActions {
   return {
     onClick: vi.fn(),
     onDoubleClick: vi.fn(),
+    onLongPress: vi.fn(),
     onScrollUp: vi.fn(),
     onScrollDown: vi.fn(),
   };
@@ -53,6 +54,38 @@ describe("routeEvent", () => {
     expect(a.onClick).not.toHaveBeenCalled();
     expect(a.onScrollUp).not.toHaveBeenCalled();
     expect(a.onScrollDown).not.toHaveBeenCalled();
+  });
+
+  it("passes the list selection to onDoubleClick (D2 needs ＋New vs no-row-info)", () => {
+    const a = makeActions();
+    routeEvent({ listEvent: { eventType: OsEventTypeList.DOUBLE_CLICK_EVENT, currentSelectItemIndex: 0 } } as any, a);
+    expect(a.onDoubleClick).toHaveBeenCalledWith({ index: 0, name: undefined });
+    routeEvent({ sysEvent: { eventType: OsEventTypeList.DOUBLE_CLICK_EVENT } } as any, a);
+    expect(a.onDoubleClick).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("routes LONG_PRESS_EVENT to onLongPress with the list selection", () => {
+    const a = makeActions();
+    routeEvent({ listEvent: { eventType: OsEventTypeList.LONG_PRESS_EVENT, currentSelectItemIndex: 0 } } as any, a);
+    expect(a.onLongPress).toHaveBeenCalledOnce();
+    expect(a.onLongPress).toHaveBeenCalledWith({ index: 0, name: undefined });
+    routeEvent({ sysEvent: { eventType: OsEventTypeList.LONG_PRESS_EVENT } } as any, a);
+    expect(a.onLongPress).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("logs one [evt] debug line per gesture event", () => {
+    const dbg = vi.spyOn(console, "debug").mockImplementation(() => {});
+    try {
+      routeEvent({ listEvent: { eventType: OsEventTypeList.CLICK_EVENT, currentSelectItemIndex: 2 } } as any, makeActions());
+      expect(dbg).toHaveBeenCalledTimes(1);
+      expect(dbg).toHaveBeenCalledWith("[evt]", OsEventTypeList.CLICK_EVENT, { index: 2, name: undefined });
+      routeEvent({ sysEvent: { eventType: OsEventTypeList.SCROLL_TOP_EVENT } } as any, makeActions());
+      expect(dbg).toHaveBeenCalledTimes(2);
+      routeEvent({ sysEvent: { eventType: OsEventTypeList.LONG_PRESS_EVENT } } as any, makeActions());
+      expect(dbg).toHaveBeenCalledTimes(3);
+    } finally {
+      dbg.mockRestore();
+    }
   });
 
   it("fires onScrollUp for SCROLL_TOP_EVENT via listEvent", () => {
@@ -141,5 +174,9 @@ describe("resolveListSelection (name → row index)", () => {
   });
   it("no selection at all stays undefined (caller decides the default)", () => {
     expect(resolveListSelection(undefined, rows)).toBeUndefined();
+  });
+  it("a present selection with no index and no name is row 0 (proto3 dropped the ＋New index)", () => {
+    expect(resolveListSelection({ index: undefined, name: undefined }, rows)).toBe(0);
+    expect(resolveListSelection({}, rows)).toBe(0);
   });
 });

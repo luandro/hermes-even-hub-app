@@ -10,8 +10,10 @@ import { createLoadingStartup, createSetupStartup, showLoadingPage } from "./ui/
 import { loadingText } from "./ui/views";
 import { createPageRenderer, pageRendererDeps } from "./ui/render-queue";
 import { renderPhoneSetup } from "./ui/phone";
-import { routeEvent, resolveListSelection } from "./input/router";
+import { routeEvent } from "./input/router";
 import { dispatch, type Gesture, type Effect } from "./input/dispatch";
+import { createTapArbiter } from "./input/tap-arbiter";
+import { createListGestures } from "./input/list-gestures";
 import { isKnownOwnSession } from "./ui/session-list";
 import { createCapture } from "./audio/capture";
 import {
@@ -34,6 +36,9 @@ const LIST_SCROLL_GRACE_MS = 8_000;
 
 /** A history load that has not answered by then is treated as refused (F7). */
 const HISTORY_TIMEOUT_MS = 6_000;
+
+/** §C gate: a lone tap waits this long for a DOUBLE_CLICK before confirming. */
+const TAP_ARBITER_MS = 400;
 
 async function boot(): Promise<void> {
   const root = document.querySelector<HTMLElement>("#app");
@@ -177,10 +182,43 @@ async function boot(): Promise<void> {
     sessionsRetryTimer = undefined;
   };
 
+  /** §C gate: gestures answer the head prompt only while it can be answered. */
+  const promptGateActive = (): boolean =>
+    state.screen === "session"
+    && state.prompts.length > 0
+    && (state.phase === "idle" || state.phase === "review");
+
+  // While the gate is active a lone tap confirms the highlighted option after
+  // the arbiter window; a double-tap (or CLICK+DOUBLE_CLICK) sends the default
+  // exactly once (A7). The callbacks re-check the gate at fire time, so a
+  // gesture held past a prompt.resolved or a phase change lands nowhere.
+  const tapArbiter = createTapArbiter({
+    windowMs: TAP_ARBITER_MS,
+    onTap: () => {
+      if (promptGateActive()) applyGesture("click");
+    },
+    onDoubleTap: () => {
+      if (promptGateActive()) applyGesture("doubleClick");
+    },
+  });
+
+  // List-screen tap arbitration (held ＋New clicks, combined CLICK +
+  // DOUBLE_CLICK sequences) lives in input/list-gestures; the prompt-gate
+  // arbiter above stays here.
+  const listGestures = createListGestures({
+    windowMs: TAP_ARBITER_MS,
+    promptGateActive,
+    promptTap: tapArbiter,
+    onListScreen: () => state.screen === "list",
+    rows: () => pages.snapshot().rows,
+    apply: applyGesture,
+  });
+
   const client = new BridgeClient({
     onMessage: (m) => {
       const prevNotice = state.notice;
       const prevLoadingFor = state.history.loadingFor;
+      const prevPromptHead = state.prompts[0]?.id;
       // Frame sequencing (re-pin, boot resume, recovery, persist gating) lives
       // in the pure connection layer; main only wires side effects. The render
       // is scheduled AFTER the resume decision so the first sessions frame
@@ -188,6 +226,14 @@ async function boot(): Promise<void> {
       const r = applyServerMessage(state, m, flags, profile?.activeSession ?? null);
       state = r.state;
       flags = r.flags;
+      // A held tap must never answer a prompt that changed underneath it
+      // (answered, resolved, cleared by hello.ok) — only the prompt it saw.
+      if (state.prompts[0]?.id !== prevPromptHead) {
+        tapArbiter.cancel();
+        // A prompt landing mid-window also ends any held ＋New click: the
+        // next gestures belong to the prompt gate, not the list.
+        listGestures.cancel();
+      }
       // Any freshly-set notice (error frame, empty transcript, …) auto-expires.
       if (state.notice && state.notice !== prevNotice) armNoticeTimer();
       for (const e of r.effects) runEffect(e);
@@ -201,6 +247,9 @@ async function boot(): Promise<void> {
     onStatus: setStatus,
     onDisconnected: () => {
       clearAllDeliveryTimers();
+      // Prompts die with the socket (§C rule 8); a held tap must die with them.
+      tapArbiter.cancel();
+      listGestures.cancel();
       // Recording into a dropped socket would produce a turn that can never be
       // delivered — stop the mic and fall back to idle.
       if (state.phase === "recording") {
@@ -330,12 +379,11 @@ async function boot(): Promise<void> {
       return;
     }
     routeEvent(e, {
-      // A name the host reports must be unique on screen — duplicates are
-      // ambiguous and the tap is dropped rather than guessed (F10).
-      onClick: (selection) => applyGesture("click", resolveListSelection(selection, pages.snapshot().rows)),
-      onDoubleClick: () => applyGesture("doubleClick"),
-      onScrollUp: () => applyGesture("scrollUp"),
-      onScrollDown: () => applyGesture("scrollDown"),
+      onClick: listGestures.onClick,
+      onDoubleClick: listGestures.onDoubleClick,
+      onLongPress: listGestures.onLongPress,
+      onScrollUp: listGestures.onScrollUp,
+      onScrollDown: listGestures.onScrollDown,
     });
   });
 

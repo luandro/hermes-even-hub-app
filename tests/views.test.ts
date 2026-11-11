@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { getTextWidth } from "@evenrealities/pretext";
 import { listRows, buildListView, loadingText, renderList, renderSession } from "../src/ui/views";
-import { initialState, type AppState } from "../src/state/store";
+import { initialState, type AppState, type Prompt } from "../src/state/store";
+import { THREAD_BODY_INNER_WIDTH, THREAD_VIEWPORT_LINES } from "../src/ui/stream";
 
 describe("buildListView", () => {
   it("derives rows and ids from one filtered array: row i ↔ ids[i], foreign hidden", () => {
@@ -276,5 +277,98 @@ describe("renderSession", () => {
     const { threadPages } = await import("../src/ui/stream");
     await renderSession(bridge, s);
     expect(calls[3]).toBe(`ready · 1/${threadPages(s.stream).length}`);
+  });
+});
+
+function prompt(overrides?: Partial<Prompt>): Prompt {
+  return {
+    id: "p1",
+    kind: "exec_approval",
+    title: "Approve?",
+    command: "rm -rf /tmp/x",
+    description: "shell",
+    options: [
+      { id: "once", label: "Approve once", style: "primary" },
+      { id: "deny", label: "Deny", style: "danger", default: true },
+    ],
+    timeout_s: 0,
+    timeout_choice: null,
+    ...overrides,
+  };
+}
+
+function prompted(p: Prompt, promptHighlight = 1): AppState {
+  return {
+    ...initialState(), screen: "session", phase: "idle", conn: "connected",
+    sessions: { items: [{ id: "a", title: "A", updated: 0 }], active: "a" },
+    prompts: [p], promptHighlight,
+  };
+}
+
+describe("renderSession: prompt panel (A6/A11)", () => {
+  it("title to header, command + wire-order options to body, marker on the highlighted row", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    await renderSession(bridge, prompted(prompt()));
+    expect(calls[1]).toBe("Approve?"); // IDS.header: the prompt title
+    expect(calls[2]).toBe("rm -rf /tmp/x\n  Approve once\n> Deny"); // IDS.body
+  });
+  it("the marker follows the highlight, not the wire order", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    await renderSession(bridge, prompted(prompt(), 0));
+    expect(calls[2]).toBe("rm -rf /tmp/x\n> Approve once\n  Deny");
+  });
+  it("2 and 6 options both fit the G2 text container", async () => {
+    for (const n of [2, 6]) {
+      const calls: Record<number, string> = {};
+      const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+      const options = Array.from({ length: n }, (_, i) => ({
+        id: `o${i}`,
+        label: `Option ${i}`,
+        style: i === 0 ? "primary" as const : "",
+        ...(i === 1 ? { default: true } : {}),
+      }));
+      await renderSession(bridge, prompted(prompt({ options, command: "python3 -m http.server 8080 --directory /var/www --bind 127.0.0.1" })));
+      const lines = calls[2].split("\n");
+      expect(lines.length, `${n} options`).toBeLessThanOrEqual(THREAD_VIEWPORT_LINES);
+      expect(lines.some((l) => l.includes(`Option ${n - 1}`)), `${n} options rendered`).toBe(true);
+      for (const line of lines) {
+        expect(getTextWidth(line), `${n} options: ${line}`).toBeLessThanOrEqual(THREAD_BODY_INNER_WIDTH);
+      }
+    }
+  });
+  it("defensively truncates option labels at 24 chars", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    const long = "L".repeat(30);
+    await renderSession(bridge, prompted(prompt({
+      options: [
+        { id: "once", label: long, style: "primary" },
+        { id: "deny", label: "Deny", style: "danger", default: true },
+      ],
+    })));
+    const lines = calls[2].split("\n");
+    expect(lines[1].trim()).toBe("L".repeat(24));
+    expect(lines[1].length).toBeLessThanOrEqual(24 + 2);
+  });
+  it("with no timer the hint promises 'no answer = no'", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    await renderSession(bridge, prompted(prompt()));
+    expect(calls[3]).toBe("scroll=choose · tap=ok · 2×tap=Deny · no answer = no");
+  });
+  it("with a timer the hint names the auto choice and the seconds", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    await renderSession(bridge, prompted(prompt({ timeout_s: 15, timeout_choice: "once" })));
+    expect(calls[3]).toBe("scroll=choose · tap=ok · 2×tap=Deny · auto Approve once 15s");
+  });
+  it("appends +N when more prompts are queued", async () => {
+    const calls: Record<number, string> = {};
+    const bridge = { textContainerUpgrade: vi.fn(async (u: any) => { calls[u.containerID] = u.content; }) } as any;
+    const s: AppState = { ...prompted(prompt()), prompts: [prompt(), prompt({ id: "p2" }), prompt({ id: "p3" })] };
+    await renderSession(bridge, s);
+    expect(calls[3]).toBe("scroll=choose · tap=ok · 2×tap=Deny · no answer = no · +2");
   });
 });

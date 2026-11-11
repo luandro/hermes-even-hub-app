@@ -1,11 +1,14 @@
 {
   "name": "hermes-even-hub-app",
   "private": true,
-  "version": "0.2.14",
+  "version": "0.2.15",
   "type": "module",
   "description": "Even Realities G2 glasses app (Even Hub WebView) — the client half of the G2 × Hermes bridge",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/huntsyea/hermes-even-hub-app.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/huntsyea/hermes-even-hub-app.git"
+  },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc && vite build",

@@ -6,6 +6,12 @@ export interface SessionItem {
   foreign?: boolean;
   read_only?: boolean;
   platform?: string;
+  /** Shared logical conversation id (defaults to the row id, V2 handoff). */
+  conversation_id?: string;
+  /** Parent session id when this row was minted by a cross-surface handoff. */
+  handoff_from?: string | null;
+  /** Surfaces this session can be resumed from (V2; default ["glasses"]). */
+  resumable_via?: string[];
 }
 
 export type HistoryItem =
@@ -25,7 +31,7 @@ export interface PromptOption {
 export type ServerMsg =
   | { t: "hello.ok"; caps: Record<string, unknown>; active: string | null }
   | { t: "sessions"; items: SessionItem[]; active: string | null }
-  | { t: "active"; id: string }
+  | { t: "active"; id: string; handoff_from?: string | null; conversation_id?: string | null }
   | { t: "history"; id: string; items: HistoryItem[]; ok?: boolean }
   | { t: "transcript"; text: string }
   | { t: "assistant"; text: string }

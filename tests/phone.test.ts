@@ -152,7 +152,7 @@ describe("phone sessions panel", () => {
   });
 
   const sessions: SessionItem[] = [
-    { id: "tg-1", title: "🔒 Connectivity ping check", updated: 2000, tokens: 42, foreign: true, read_only: true, platform: "telegram" },
+    { id: "tg-1", title: "🔒 Connectivity ping check", updated: 2000, tokens: 42, foreign: true, read_only: false, platform: "telegram", conversation_id: "tg-1", resumable_via: ["glasses", "telegram"] },
     { id: "g2-1", title: "List Comapeo session tasks", updated: 1000, tokens: 7, platform: "even_g2" },
   ];
 
@@ -231,14 +231,45 @@ describe("phone sessions panel", () => {
     expect(copyButton.textContent).toBe("Copied!");
   });
 
-  it("offers Open on glasses (not /resume) for glasses rows and marks the active one", () => {
+  it("offers Copy /resume for glasses rows too, marks the active one, and drops the false note", async () => {
     const { root } = render();
     const row = rowById(root, "g2-1")!;
     const buttons = findAll(row, "button").map((b) => b.textContent);
-    expect(buttons).not.toContain("Copy /resume");
+    expect(buttons).toContain("Copy /resume");
     expect(buttons).toContain("Copy ID");
     expect(collectTextAndPlaceholders(row).texts.join(" ")).toContain("Active");
-    expect(collectTextAndPlaceholders(row).texts.join(" ")).toContain("cannot /resume in Telegram");
+    expect(collectTextAndPlaceholders(row).texts.join(" ")).not.toContain("cannot /resume");
+    // The copied payload continues THIS glasses session in Telegram.
+    const copy = findAll(row, "button").find((b) => b.textContent === "Copy /resume")!;
+    copy.fire("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(clipboardWrites).toContain("/resume g2-1");
+  });
+  it("offers Continue on glasses for resumable telegram rows and dispatches the handoff", () => {
+    const { root, actions } = render();
+    const spy = vi.spyOn(actions, "onSwitchSession");
+    const row = rowById(root, "tg-1")!;
+    findButtonByText(row, "Continue on glasses")!.fire("click");
+    expect(spy).toHaveBeenCalledWith("tg-1");
+  });
+  it("a read-only telegram row keeps Copy /resume but offers no Continue on glasses", () => {
+    const ro: SessionItem[] = [
+      { id: "tg-ro", title: "Locked", updated: 2000, foreign: true, read_only: true, platform: "telegram" },
+    ];
+    const { root } = render({ sessions: ro, activeSession: null });
+    const row = rowById(root, "tg-ro")!;
+    expect(findButtonByText(row, "Continue on glasses")).toBeUndefined();
+    expect(findAll(row, "button").some((b) => b.textContent === "Copy /resume")).toBe(true);
+  });
+  it("a glasses row handed off from telegram wears a Shared badge", () => {
+    const shared: SessionItem[] = [
+      { id: "g2-2", title: "Deploy debug", updated: 500, platform: "even_g2", handoff_from: "tg-9", conversation_id: "tg-9" },
+    ];
+    const { root } = render({ sessions: shared, activeSession: null });
+    const row = rowById(root, "g2-2")!;
+    const texts = collectTextAndPlaceholders(row).texts.join(" ");
+    expect(texts).toContain("Glasses");
+    expect(texts).toContain("Shared");
   });
 
   it("dispatches onSwitchSession from Open on glasses", () => {

@@ -401,6 +401,64 @@ describe("reduce: just-created own session lifecycle (F3)", () => {
   });
 });
 
+describe("reduce: cross-surface handoff adoption (V2)", () => {
+  // The wearer tapped a resumable foreign row: enterSession set active to the
+  // foreign id and armed loadingFor — the bridge now answers the switch.
+  const items: AppState["sessions"]["items"] = [
+    { id: "tg-1", title: "Telegram", updated: 9, foreign: true, platform: "telegram" },
+    { id: "own-1", title: "Own", updated: 3 },
+  ];
+  function tapped(): AppState {
+    return {
+      ...initialState(),
+      screen: "session",
+      sessions: { items, active: "tg-1" },
+      history: { loadingFor: "tg-1", failedFor: null, refresh: false },
+    };
+  }
+
+  it("adopts the minted handoff child id from the active frame while the switch is pending", () => {
+    const next = reduce(tapped(), { t: "active", id: "g2-2", handoff_from: "tg-1", conversation_id: "tg-1" });
+    expect(next.sessions.active).toBe("g2-2");
+    expect(next.history.loadingFor).toBe("g2-2");
+    // Claimed like a just-created session: speakable immediately, persisted
+    // once a sessions frame lists it own.
+    expect(next.unconfirmedOwnId).toBe("g2-2");
+  });
+  it("adopts the foreign id itself when the bridge answers the pending switch with it", () => {
+    const next = reduce(tapped(), { t: "active", id: "tg-1" });
+    expect(next.sessions.active).toBe("tg-1");
+    expect(next.history.loadingFor).toBe("tg-1");
+  });
+  it("still rejects a foreign active frame when no switch is pending", () => {
+    const idle: AppState = {
+      ...initialState(),
+      screen: "session",
+      sessions: { items, active: "own-1" },
+      history: { loadingFor: null, failedFor: null, refresh: false },
+    };
+    const next = reduce(idle, { t: "active", id: "tg-1" });
+    expect(next.sessions.active).toBe("own-1");
+  });
+  it("loads turns from the history frame of the adopted handoff child", () => {
+    let s = reduce(tapped(), { t: "active", id: "g2-2", handoff_from: "tg-1" });
+    s = reduce(s, { t: "history", id: "g2-2", items: [{ kind: "user", text: "hi" }], ok: true });
+    expect(s.history.loadingFor).toBeNull();
+    expect(s.sessions.active).toBe("g2-2");
+    expect(s.stream).toEqual([{ kind: "user", text: "hi" }]);
+  });
+  it("a sessions frame confirming the handoff child own clears the claim", () => {
+    let s = reduce(tapped(), { t: "active", id: "g2-2", handoff_from: "tg-1" });
+    s = reduce(s, {
+      t: "sessions",
+      items: [...items, { id: "g2-2", title: "Telegram", updated: 10, handoff_from: "tg-1", conversation_id: "tg-1" }],
+      active: "g2-2",
+    });
+    expect(s.sessions.active).toBe("g2-2");
+    expect(s.unconfirmedOwnId).toBeNull();
+  });
+});
+
 describe("reduce: history refresh after a reconnect re-pin preserves in-progress work (F1)", () => {
   function midConversation(): AppState {
     return {

@@ -5,7 +5,7 @@ import { sessionsNew, sessionsSwitch, textMsg, sessionsList, promptResponse } fr
 import { threadPages } from "../src/ui/stream";
 import { buildListView } from "../src/ui/views";
 
-function listWith(items: { id: string; title: string; updated?: number; read_only?: boolean; foreign?: boolean }[]): AppState {
+function listWith(items: { id: string; title: string; updated?: number; read_only?: boolean; foreign?: boolean; platform?: string }[]): AppState {
   return {
     ...initialState(),
     sessionsLoaded: true,
@@ -112,14 +112,26 @@ describe("dispatch: list", () => {
     expect(r.state.sessions.active).toBe("middle");
     expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("middle") }]);
   });
-  it("read_only and foreign sessions never appear in the list snapshot", () => {
+  it("read-only sessions never appear in the list snapshot; resumable foreign rows do", () => {
     const s = listWith([
-      { id: "ro", title: "Telegram session", read_only: true },
+      { id: "ro", title: "Locked session", read_only: true },
       { id: "tg", title: "Foreign session", foreign: true },
       { id: "b", title: "B" },
     ]);
     const shown = buildListView(s);
-    expect(shown.ids).toEqual([null, "b"]);
+    expect(shown.ids).toEqual([null, "tg", "b"]);
+  });
+  it("V2: tapping a resumable foreign row enters it and sends sessions.switch (handoff)", () => {
+    const s = listWith([
+      { id: "tg-1", title: "Telegram chat", foreign: true, platform: "telegram" },
+      { id: "b", title: "B" },
+    ]);
+    const shown = buildListView(s);
+    const r = dispatch(s, "click", 1, shown);
+    expect(r.state.screen).toBe("session");
+    expect(r.state.sessions.active).toBe("tg-1");
+    expect(r.state.history.loadingFor).toBe("tg-1");
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("tg-1") }]);
   });
   it("defense-in-depth: a read_only id in a stale snapshot still opens locally without switch", () => {
     const s = listWith([
@@ -219,9 +231,10 @@ describe("dispatch: list", () => {
     expect(r.effects).toEqual([]);
   });
 
-  it("ignores a tap on a stale row whose session is now foreign (F5)", () => {
+  it("V2: a stale row whose session is now foreign still switches (handoff target)", () => {
     // The displayed snapshot still maps row 1 to a session that a fresh
-    // sessions frame has since marked foreign (without read_only).
+    // sessions frame has since marked foreign (without read_only) — a listed
+    // foreign row is a legitimate cross-surface handoff target now.
     const displayed = listWith([{ id: "was-mine", title: "Was mine", updated: 2 }]);
     const shown = buildListView(displayed);
     const nowForeign = listWith([
@@ -229,9 +242,9 @@ describe("dispatch: list", () => {
       { id: "b", title: "B", updated: 1 },
     ]);
     const r = dispatch(nowForeign, "click", 1, shown);
-    expect(r.state.screen).toBe("list");
-    expect(r.state.sessions.active).toBeNull();
-    expect(r.effects).toEqual([]);
+    expect(r.state.screen).toBe("session");
+    expect(r.state.sessions.active).toBe("was-mine");
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("was-mine") }]);
   });
   it("ignores a tap on a stale row whose session no longer exists (F5)", () => {
     const displayed = listWith([{ id: "gone", title: "Gone", updated: 2 }]);

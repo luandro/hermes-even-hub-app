@@ -1,6 +1,6 @@
 import { HINTS, defaultOptionIndex, offlineNotice, type AppState, type StreamItem } from "../state/store";
 import { promptResponse, sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../protocol";
-import { isOwnSession, isKnownOwnSession, listableSessions, pickResumeSession, sessionForListIndex } from "../ui/session-list";
+import { isOwnSession, isKnownOwnSession, ownSessions, pickResumeSession, sessionForListIndex } from "../ui/session-list";
 import { nextThreadViewportCursor, previousThreadViewportIndex } from "../ui/stream";
 
 export type Gesture = "click" | "doubleClick" | "longPress" | "scrollUp" | "scrollDown";
@@ -20,7 +20,7 @@ export function generateTurnId(): string {
   return `turn-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-const enterSession = (
+export const enterSession = (
   s: AppState,
   active: string | null,
   opts?: { newSession?: boolean },
@@ -75,7 +75,7 @@ export function recoverUnavailableSession(
   const fallback =
     priorFailure
       ? null
-      : listableSessions(s.sessions.items)
+      : ownSessions(s.sessions.items)
         .map((i) => i.id)
         .find((id) => id !== failedId && id !== s.sessions.active)
       ?? null;
@@ -123,7 +123,7 @@ function openCurrent(s: AppState): DispatchResult {
   const currentIsOurs = Boolean(
     active && (isKnownOwnSession(s.sessions.items, active) || active === s.unconfirmedOwnId),
   );
-  const id = currentIsOurs ? active : listableSessions(s.sessions.items)[0]?.id ?? null;
+  const id = currentIsOurs ? active : ownSessions(s.sessions.items)[0]?.id ?? null;
   if (!id) {
     return { state: { ...s, notice: HINTS.hintNewSession }, effects: [] };
   }
@@ -166,7 +166,7 @@ export function dispatch(
       const item = s.sessions.items.find((x) => x.id === id);
       // Defense-in-depth for stale on-screen lists: a read-only id that can no
       // longer appear in a rendered row still opens the local read-only view
-      // instead of a switch. The own-session guard below is the real gate.
+      // instead of a switch. The guards below are the real gate.
       if (item?.read_only) {
         return {
           state: {
@@ -178,11 +178,12 @@ export function dispatch(
           effects: [],
         };
       }
-      // Immediately before switching, the session must still exist and be OURS
-      // in the live list (or be the just-created session): the displayed row
-      // can be stale — deleted or re-flagged foreign since it was drawn — and
-      // switching into it would hijack the conversation.
-      if (!item || !isOwnSession(item)) {
+      // Immediately before switching, the session must still exist in the live
+      // list: the displayed row can be stale — deleted since it was drawn.
+      // Own rows switch directly; a listed foreign row (V2) taps into a
+      // cross-surface handoff. Anything unlisted is not a valid target unless
+      // it is our just-created session.
+      if (!item || !(isOwnSession(item) || item.foreign)) {
         if (id !== s.unconfirmedOwnId) return { state: s, effects: [] };
       }
       return { state: enterSession(s, id), effects: [{ kind: "send", frame: sessionsSwitch(id) }] };

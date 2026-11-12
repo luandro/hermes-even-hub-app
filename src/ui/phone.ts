@@ -42,9 +42,15 @@ export interface PhoneSetupActions {
   onSaveDevice: (device: string) => void;
 }
 
-/** Telegram-owned rows: cross-platform /resume works ONLY for these (V1). */
+/** Foreign rows (telegram by platform, or any row the bridge flags foreign). */
 function isTelegramSession(item: SessionItem): boolean {
   return item.platform === "telegram" || item.foreign === true;
+}
+
+/** Foreign-row badge label: the owning surface's name, not a hardcoded one. */
+function foreignBadgeLabel(item: SessionItem): string {
+  if (item.platform === "telegram") return "Telegram";
+  return item.platform || "foreign";
 }
 
 function stripLock(title: string): string {
@@ -160,9 +166,14 @@ function sessionRow(item: SessionItem, active: string | null, actions: PhoneSetu
     el(
       "span",
       `origin-badge ${telegram ? "badge-telegram" : "badge-glasses"}`,
-      telegram ? "Telegram" : "Glasses",
+      telegram ? foreignBadgeLabel(item) : "Glasses",
     ),
   );
+  // A glasses row minted by a cross-surface handoff shares its conversation
+  // with the foreign leg it came from (V2).
+  if (!telegram && item.handoff_from) {
+    titleLine.append(el("span", "origin-badge badge-shared", "Shared"));
+  }
   if (item.id === active) {
     titleLine.append(el("span", "active-badge", telegram ? "Active" : "Active on glasses"));
   }
@@ -176,7 +187,13 @@ function sessionRow(item: SessionItem, active: string | null, actions: PhoneSetu
 
   const actionsRow = el("div", "session-actions");
   if (telegram) {
-    // Telegram-owned: /resume <id> pasted into Telegram is the supported path.
+    // Resumable foreign row: continue the conversation on the glasses via a
+    // cross-surface handoff (V2); read-only rows only offer the /resume copy.
+    if (!item.read_only) {
+      const cont = button("button", "Continue on glasses");
+      cont.addEventListener("click", () => actions.onSwitchSession(item.id));
+      actionsRow.append(cont);
+    }
     actionsRow.append(copyButton("Copy /resume", `/resume ${item.id}`));
     actionsRow.append(copyButton("Copy ID", item.id));
   } else {
@@ -185,8 +202,9 @@ function sessionRow(item: SessionItem, active: string | null, actions: PhoneSetu
       open.addEventListener("click", () => actions.onSwitchSession(item.id));
       actionsRow.append(open);
     }
+    // /resume <id> pasted into Telegram continues THIS glasses session there.
+    actionsRow.append(copyButton("Copy /resume", `/resume ${item.id}`));
     actionsRow.append(copyButton("Copy ID", item.id));
-    actionsRow.append(el("span", "session-note", "G2 session — cannot /resume in Telegram"));
   }
 
   row.append(main, actionsRow);

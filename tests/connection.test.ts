@@ -142,6 +142,44 @@ describe("applyServerMessage: hello.ok re-pin reads the id from BEFORE the reduc
   });
 });
 
+describe("applyServerMessage: cross-surface handoff switch (V2)", () => {
+  const flags = (): ConnectionFlags => ({ helloOk: true, bootResumeDone: true });
+  const items = [
+    { id: "tg-1", title: "Telegram", updated: 9, foreign: true, platform: "telegram" },
+    own("own-1", 3),
+  ];
+
+  it("adopts the minted handoff child, loads its history, persists once listed own", () => {
+    // The wearer tapped the resumable foreign row; enterSession armed loadingFor.
+    let s: AppState = {
+      ...initialState(),
+      screen: "session",
+      sessions: { items, active: "tg-1" },
+      history: { loadingFor: "tg-1", failedFor: null, refresh: false },
+    };
+
+    // Bridge: cross-surface handoff minted even_g2 child g2-2.
+    const r1 = applyServerMessage(s, { t: "active", id: "g2-2", handoff_from: "tg-1", conversation_id: "tg-1" }, flags(), null);
+    expect(r1.state.sessions.active).toBe("g2-2");
+    expect(r1.state.history.loadingFor).toBe("g2-2");
+    expect(r1.persist).toBeNull(); // not yet listed own
+
+    // The following sessions frame lists g2-2 own: NOW its id is safe to save.
+    const r2 = applyServerMessage(r1.state, {
+      t: "sessions",
+      items: [...items, { id: "g2-2", title: "Telegram", updated: 10, handoff_from: "tg-1", conversation_id: "tg-1" }],
+      active: "g2-2",
+    }, flags(), null);
+    expect(r2.state.unconfirmedOwnId).toBeNull();
+    expect(r2.persist).toBe("g2-2");
+
+    // And the history of the handoff child loads its turns.
+    const r3 = applyServerMessage(r2.state, { t: "history", id: "g2-2", items: [{ kind: "user", text: "hi" }], ok: true }, flags(), null);
+    expect(r3.state.stream).toEqual([{ kind: "user", text: "hi" }]);
+    expect(r3.state.history.loadingFor).toBeNull();
+  });
+});
+
 describe("applyServerMessage: persistence is gated on confirmed own ids (F3c)", () => {
   const items = [own("mine", 3), { id: "tg", title: "Telegram", updated: 9, foreign: true }];
 

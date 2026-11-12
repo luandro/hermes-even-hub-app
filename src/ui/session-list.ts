@@ -31,10 +31,21 @@ export function isOwnSession(item: SessionItem): boolean {
 }
 
 /**
- * The sessions that may appear as list rows, newest first. Rows AND ids derive
- * from this one array, so row i always resolves to ids[i].
+ * The sessions that may appear as list rows, newest first: every non-read-only
+ * row — own rows plus resumable foreign rows (V2: a listed foreign row taps
+ * into a cross-surface handoff). Rows AND ids derive from this one array, so
+ * row i always resolves to ids[i].
  */
 export function listableSessions(items: SessionItem[]): SessionItem[] {
+  return orderedSessions(items.filter((item) => !item.read_only));
+}
+
+/**
+ * Own (speakable) sessions, newest first — the pool for cold-boot resume and
+ * failure recovery. A foreign row must never be auto-entered without an
+ * explicit tap (pickResumeSession/openCurrent/recoverUnavailableSession).
+ */
+export function ownSessions(items: SessionItem[]): SessionItem[] {
   return orderedSessions(items.filter(isOwnSession));
 }
 
@@ -62,7 +73,7 @@ export function pickResumeSession(
 ): string | null {
   if (bridgeActive && isKnownOwnSession(items, bridgeActive)) return bridgeActive;
   if (persisted && isKnownOwnSession(items, persisted)) return persisted;
-  return listableSessions(items)[0]?.id ?? null;
+  return ownSessions(items)[0]?.id ?? null;
 }
 
 export function sessionForListIndex(items: SessionItem[], index: number): SessionItem | undefined {
@@ -106,13 +117,23 @@ export function sessionListRows(
   ];
 }
 
+/** Firmware-safe ASCII origin tag for foreign rows ([TG]/[EXT]) — the display
+ *  font drops emoji glyphs silently, so 🔒/📱 badges render as stray gaps. */
+function originTag(item: SessionItem): string {
+  if (!item.foreign) return "";
+  return item.platform === "telegram" ? "[TG] " : "[EXT] ";
+}
+
 export function formatSessionRow(item: SessionItem, active: string | null, nowSeconds: number): string {
   const marker = item.id === active ? "●" : " ";
   const age = compactAge(item.updated, nowSeconds);
   const prefix = `${marker} ${age} `;
 
+  // Older bridges prefix locked titles with 🔒; it renders as nothing on the
+  // display, so strip it before tagging.
+  const rawTitle = sessionRowTitle(item).replace(/^🔒\s*/, "");
   const title = truncateTitle(
-    sessionRowTitle(item),
+    originTag(item) + rawTitle,
     LIST_ROW_WIDTH_PX - getTextWidth(prefix),
     MAX_ITEM_CHARS - prefix.length,
   );

@@ -378,6 +378,12 @@ code {
   color: #17663b;
 }
 
+.origin-badge.badge-shared {
+  border: 1px solid #cbb8e0;
+  background: #f6f1fb;
+  color: #5b3a8e;
+}
+
 .active-badge {
   border: 1px solid #c9d2df;
   background: #ffffff;
@@ -418,11 +424,6 @@ code {
 
 .session-actions button[type="button"] {
   min-width: 0;
-}
-
-.session-note {
-  color: #647184;
-  font-size: 12px;
 }
 
 .setting-row {

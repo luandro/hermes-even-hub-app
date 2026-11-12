@@ -210,11 +210,15 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
     }
     case "active": {
       // A Telegram session can be active on the bridge side; adopting its id
-      // here would steal the G2 conversation out from under the wearer.
-      if (isKnownForeignSession(s.sessions.items, m.id)) return s;
+      // here would steal the G2 conversation out from under the wearer —
+      // UNLESS we are the ones waiting on a switch (V2): the answer to a tap
+      // on a resumable foreign row may carry that foreign id (direct repoint)
+      // or the minted handoff child (an unknown id), and both must land.
+      if (s.history.loadingFor === null && isKnownForeignSession(s.sessions.items, m.id)) return s;
       const unknown = !s.sessions.items.some((i) => i.id === m.id);
-      // The id we just created sessions.new for: unknown to the list, but ours.
-      const claimOurs = unknown && s.expectingNewSession;
+      // An unknown id is OURS when we created it (sessions.new) or when it
+      // answers a pending switch (the minted cross-surface handoff child).
+      const claimOurs = unknown && (s.expectingNewSession || s.history.loadingFor !== null);
       return {
         ...s,
         sessions: { ...s.sessions, active: m.id },

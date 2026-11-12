@@ -11,7 +11,7 @@ import { loadingText } from "./ui/views";
 import { createPageRenderer, pageRendererDeps } from "./ui/render-queue";
 import { renderPhoneSetup } from "./ui/phone";
 import { routeEvent } from "./input/router";
-import { dispatch, type Gesture, type Effect } from "./input/dispatch";
+import { dispatch, enterSession, type Gesture, type Effect } from "./input/dispatch";
 import { createTapArbiter } from "./input/tap-arbiter";
 import { createListGestures } from "./input/list-gestures";
 import { isKnownOwnSession } from "./ui/session-list";
@@ -161,6 +161,15 @@ async function boot(): Promise<void> {
         client.send(sessionsList());
       },
       onSwitchSession: (id) => {
+        // Phone-initiated switch ("Open/Continue on glasses"): transition the
+        // glasses into the session immediately, then tell the bridge. For a
+        // resumable foreign row the bridge answers with the minted handoff
+        // child via `active`, which the store adopts (V2).
+        const prevLoadingFor = state.history.loadingFor;
+        state = enterSession(state, id);
+        scheduleRender(state);
+        renderPhone();
+        historyWatch.update(prevLoadingFor, state.history.loadingFor);
         client.send(sessionsSwitch(id));
       },
       onSettingsSet: (settings) => {

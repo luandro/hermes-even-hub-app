@@ -5,13 +5,13 @@ import { initialState, type AppState, type Prompt } from "../src/state/store";
 import { THREAD_BODY_INNER_WIDTH, THREAD_VIEWPORT_LINES } from "../src/ui/stream";
 
 describe("buildListView", () => {
-  it("derives rows and ids from one filtered array: row i ↔ ids[i], foreign hidden", () => {
+  it("derives rows and ids from one filtered array: row i ↔ ids[i], read-only hidden", () => {
     const s: AppState = {
       ...initialState(),
       sessionsLoaded: true,
       sessions: {
         items: [
-          { id: "tg-1", title: "Telegram chat", updated: 900, foreign: true },
+          { id: "tg-1", title: "Telegram chat", updated: 900, foreign: true, platform: "telegram" },
           { id: "ro-1", title: "Read-only chat", updated: 800, read_only: true },
           { id: "own-2", title: "second own", updated: 300 },
           { id: "own-1", title: "first own", updated: 100 },
@@ -20,16 +20,18 @@ describe("buildListView", () => {
       },
     };
     const view = buildListView(s, 400);
-    expect(view.ids).toEqual([null, "own-2", "own-1"]);
-    expect(view.rows).toHaveLength(3);
-    expect(view.rows[1]).toContain("second own");
-    expect(view.rows[1]).toContain("●"); // active marker survives filtering
-    expect(view.rows.some((r) => r.includes("Telegram") || r.includes("Read-only"))).toBe(false);
+    // V2: the resumable foreign row is listed (tagged); read-only stays hidden.
+    expect(view.ids).toEqual([null, "tg-1", "own-2", "own-1"]);
+    expect(view.rows).toHaveLength(4);
+    expect(view.rows[1]).toContain("[TG] Telegram chat");
+    expect(view.rows[2]).toContain("second own");
+    expect(view.rows[2]).toContain("●"); // active marker survives filtering
+    expect(view.rows.some((r) => r.includes("Read-only"))).toBe(false);
   });
 
-  it("shows exactly ＋New plus the 3 own rows for a 12-foreign + 3-own fixture", () => {
+  it("shows exactly ＋New plus tagged foreign rows and the 3 own rows for a 12-foreign + 3-own fixture", () => {
     const items = [
-      ...Array.from({ length: 12 }, (_, i) => ({ id: `tg-${i}`, title: `tg ${i}`, updated: 1000 + i, foreign: true })),
+      ...Array.from({ length: 12 }, (_, i) => ({ id: `tg-${i}`, title: `tg ${i}`, updated: 1000 + i, foreign: true, platform: "telegram" })),
       { id: "own-a", title: "own a", updated: 5 },
       { id: "own-b", title: "own b", updated: 3 },
       { id: "own-c", title: "own c", updated: 1 },
@@ -38,9 +40,10 @@ describe("buildListView", () => {
       { ...initialState(), sessionsLoaded: true, sessions: { items, active: null } },
       10,
     );
-    expect(view.rows).toHaveLength(4);
+    expect(view.rows).toHaveLength(16);
     expect(view.rows[0]).toBe("＋ New session");
-    expect(view.ids).toEqual([null, "own-a", "own-b", "own-c"]);
+    expect(view.rows[1]).toContain("[TG] tg 11");
+    expect(view.ids).toEqual([null, ...Array.from({ length: 12 }, (_, i) => `tg-${11 - i}`), "own-a", "own-b", "own-c"]);
   });
 });
 

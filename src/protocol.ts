@@ -90,6 +90,11 @@ export const promptResponse = (id: string, choice: string) =>
 export const audioStart = () => JSON.stringify({ t: "audio.start" });
 export const audioStop = () => JSON.stringify({ t: "audio.stop" });
 
+/** Live bridge settings (phone settings panel). Empty keys are omitted so the
+ *  bridge's all-or-nothing validation sees only what the user changed. */
+export const settingsSet = (settings: { asr_model?: string; auto_approve_timeout_s?: number }) =>
+  JSON.stringify({ t: "settings.set", ...settings });
+
 // §C option id: ^[a-z0-9_-]{1,32}$, and "none" is forbidden.
 const OPTION_ID = /^[a-z0-9_-]{1,32}$/;
 const PROMPT_KINDS = new Set(["exec_approval"]); // clarify/slash_confirm are reserved (phase 2)

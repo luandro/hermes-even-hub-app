@@ -3,6 +3,8 @@ import type { EvenAppBridge } from "@evenrealities/even_hub_sdk";
 export interface ConnectionProfile {
   url: string;
   token: string;
+  /** Optional hello device id (1-64 chars); omitted ⇒ the bridge defaults to "g2". */
+  device?: string;
   activeSession?: string;
   updatedAt: number;
 }
@@ -22,12 +24,22 @@ export function normalizeConnectionProfile(profile: ConnectionProfile): Connecti
   return {
     url: profile.url.trim(),
     token: profile.token.trim(),
+    device: normalizeDevice(profile.device),
     activeSession: profile.activeSession?.trim() || undefined,
     updatedAt: profile.updatedAt,
   };
 }
 
-export function validateConnectionProfile(profile: Pick<ConnectionProfile, "url" | "token">): ProfileValidation {
+/** Device id: trimmed, 1-64 chars, anything else falls back to the default. */
+export function normalizeDevice(device: string | undefined): string | undefined {
+  const trimmed = (device ?? "").trim();
+  if (!trimmed || trimmed.length > 64) return undefined;
+  return trimmed;
+}
+
+export function validateConnectionProfile(
+  profile: Pick<ConnectionProfile, "url" | "token" | "device">,
+): ProfileValidation {
   const errors: string[] = [];
   const url = profile.url.trim();
   const token = profile.token.trim();
@@ -46,6 +58,11 @@ export function validateConnectionProfile(profile: Pick<ConnectionProfile, "url"
   }
 
   if (!token) errors.push("Bridge token is required.");
+
+  const device = (profile.device ?? "").trim();
+  if (device.length > 64) {
+    errors.push("Device ID must be 1-64 characters.");
+  }
   return { valid: errors.length === 0, errors };
 }
 
@@ -112,6 +129,7 @@ function parseProfile(raw: string): ConnectionProfile | null {
     return normalizeConnectionProfile({
       url: value.url,
       token: value.token,
+      device: typeof value.device === "string" ? value.device : undefined,
       activeSession: typeof value.activeSession === "string" ? value.activeSession : undefined,
       updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now(),
     });

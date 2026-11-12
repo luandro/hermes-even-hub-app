@@ -66,7 +66,7 @@ export class BridgeClient {
     (ws as any).onopen = () => {
       this.delay = 500;
       this.d.onStatus?.("connected");
-      (ws as any).send(hello(token, "g2"));
+      (ws as any).send(hello(token, this.profile.device || "g2"));
       this.lastRecv = Date.now();
       this.watchdog = setInterval(() => {
         if (Date.now() - this.lastRecv >= 45_000) {

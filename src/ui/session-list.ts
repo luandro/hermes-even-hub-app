@@ -119,7 +119,9 @@ export function formatSessionRow(item: SessionItem, active: string | null, nowSe
   return truncateBytes(prefix + title, MAX_ITEM_BYTES);
 }
 
-function compactAge(updated: number, nowSeconds: number): string {
+/** Relative age for display ("now", "5m", "3h", "2d") — shared by the glasses
+ *  list rows and the phone sessions panel. */
+export function compactAge(updated: number, nowSeconds: number): string {
   const seconds = activityTime(updated);
   if (seconds <= 0) return "--";
 

@@ -1,16 +1,54 @@
 import type { BridgeDefaults } from "../config";
 import type { ConnectionProfile } from "../storage/persist";
+import type { SessionItem } from "../protocol";
+import { compactAge, orderedSessions } from "./session-list";
+
+/** Bridge capability snapshot from `hello.ok` (older bridges send `{}`). */
+export interface PhoneCaps {
+  profile?: unknown;
+  net_mode?: unknown;
+  asr_active?: unknown;
+  asr_models?: unknown;
+  asr_env_pinned?: unknown;
+  auto_approve_timeout_s?: unknown;
+}
 
 interface PhoneSetupState {
   profile: ConnectionProfile | null;
   defaults: BridgeDefaults;
   status: string;
   errors: string[];
+  sessions?: SessionItem[];
+  activeSession?: string | null;
+  sessionsLoaded?: boolean;
+  caps?: PhoneCaps | null;
 }
 
-interface PhoneSetupActions {
+export interface PhoneSettings {
+  asr_model?: string;
+  auto_approve_timeout_s?: number;
+}
+
+export interface PhoneSetupActions {
   onSaveConnect: (url: string, token: string) => void;
   onDisconnect: () => void;
+  /** Refresh button — re-requests the session list. */
+  onRefreshSessions: () => void;
+  /** "Open on glasses" — switch the glasses to this (own) session. */
+  onSwitchSession: (id: string) => void;
+  /** Live bridge settings (`settings.set` frame). */
+  onSettingsSet: (settings: PhoneSettings) => void;
+  /** Persist the hello device id (takes effect on reconnect). */
+  onSaveDevice: (device: string) => void;
+}
+
+/** Telegram-owned rows: cross-platform /resume works ONLY for these (V1). */
+function isTelegramSession(item: SessionItem): boolean {
+  return item.platform === "telegram" || item.foreign === true;
+}
+
+function stripLock(title: string): string {
+  return title.replace(/^🔒\s*/, "");
 }
 
 export function renderPhoneSetup(
@@ -21,8 +59,8 @@ export function renderPhoneSetup(
   const shell = el("main", "setup-shell");
   const panel = el("section", "setup-panel");
   const form = el("form", "setup-form");
-  const url = input("url", "Bridge URL", state.profile?.url || state.defaults.url, "wss://g2-bridge.taile61e1.ts.net");
-  const token = input("password", "Bridge token", state.profile?.token || state.defaults.token, "Shared bridge token");
+  const url = input("url", "url", state.profile?.url || state.defaults.url, "wss://g2-bridge.taile61e1.ts.net");
+  const token = input("password", "token", state.profile?.token || state.defaults.token, "Shared bridge token");
   const header = el("header", "setup-header");
   const status = el("p", `setup-status ${statusClass(state.status)}`, statusText(state.status));
   const title = el("h1", "", "Hermes");
@@ -44,10 +82,229 @@ export function renderPhoneSetup(
   });
 
   form.append(label("Bridge URL", url), label("Token", token), actionsRow);
-  panel.append(header, updated, errorList(state.errors), form, helpBlock());
+  panel.append(
+    header,
+    updated,
+    errorList(state.errors),
+    form,
+    sessionsPanel(state, actions),
+    settingsPanel(state, actions),
+    helpBlock(),
+  );
   shell.append(panel);
   root.replaceChildren(shell);
 }
+
+// ── Sessions panel ───────────────────────────────────────────────────────────
+
+type SessionFilter = "all" | "telegram" | "glasses";
+
+const FILTERS: { key: SessionFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "telegram", label: "Telegram" },
+  { key: "glasses", label: "Glasses" },
+];
+
+function rowMatches(item: SessionItem, filter: SessionFilter): boolean {
+  if (filter === "all") return true;
+  return filter === "telegram" ? isTelegramSession(item) : !isTelegramSession(item);
+}
+
+function sessionsPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLElement {
+  const section = el("section", "phone-panel sessions-panel");
+  const header = el("div", "panel-header");
+  const refresh = button("button", "Refresh");
+  refresh.disabled = state.status !== "connected" && state.status !== "reconnecting";
+  refresh.addEventListener("click", () => actions.onRefreshSessions());
+  header.append(el("h2", "panel-title", "Sessions"), refresh);
+
+  const tabs = el("div", "filter-tabs");
+  const rowsEl = el("div", "session-rows");
+  const items = state.sessions ?? [];
+  const rowRefs: { row: HTMLElement; item: SessionItem }[] = [];
+  for (const item of orderedSessions(items)) {
+    rowRefs.push({ row: sessionRow(item, state.activeSession ?? null, actions), item });
+  }
+  for (const { row } of rowRefs) rowsEl.append(row);
+
+  const tabRefs: { tab: HTMLButtonElement; key: SessionFilter }[] = [];
+  for (const { key, label } of FILTERS) {
+    const tab = button("button", label);
+    tab.className = key === "all" ? "filter-tab is-active" : "filter-tab";
+    tab.addEventListener("click", () => {
+      for (const { row, item } of rowRefs) row.hidden = !rowMatches(item, key);
+      for (const ref of tabRefs) {
+        ref.tab.className = ref.key === key ? "filter-tab is-active" : "filter-tab";
+      }
+    });
+    tabRefs.push({ tab, key });
+    tabs.append(tab);
+  }
+
+  const body = !state.sessionsLoaded
+    ? el("p", "session-status", "Loading sessions…")
+    : items.length === 0
+      ? el("p", "session-status", "No sessions yet")
+      : rowsEl;
+  section.append(header, tabs, body);
+  return section;
+}
+
+function sessionRow(item: SessionItem, active: string | null, actions: PhoneSetupActions): HTMLElement {
+  const telegram = isTelegramSession(item);
+  const row = el("article", `session-row ${telegram ? "is-telegram" : "is-glasses"}`);
+  const main = el("div", "session-main");
+  const titleLine = el("div", "session-title-line");
+  titleLine.append(
+    el("span", "session-title", stripLock(item.title || "New session")),
+    el(
+      "span",
+      `origin-badge ${telegram ? "badge-telegram" : "badge-glasses"}`,
+      telegram ? "Telegram" : "Glasses",
+    ),
+  );
+  if (item.id === active) {
+    titleLine.append(el("span", "active-badge", telegram ? "Active" : "Active on glasses"));
+  }
+  const meta = el("div", "session-meta");
+  meta.append(
+    el("span", "session-age", compactAge(item.updated, Math.floor(Date.now() / 1000))),
+    el("span", "session-tokens", `${item.tokens ?? 0} tokens`),
+    el("code", "session-id", item.id),
+  );
+  main.append(titleLine, meta);
+
+  const actionsRow = el("div", "session-actions");
+  if (telegram) {
+    // Telegram-owned: /resume <id> pasted into Telegram is the supported path.
+    actionsRow.append(copyButton("Copy /resume", `/resume ${item.id}`));
+    actionsRow.append(copyButton("Copy ID", item.id));
+  } else {
+    if (item.id !== active) {
+      const open = button("button", "Open on glasses");
+      open.addEventListener("click", () => actions.onSwitchSession(item.id));
+      actionsRow.append(open);
+    }
+    actionsRow.append(copyButton("Copy ID", item.id));
+    actionsRow.append(el("span", "session-note", "G2 session — cannot /resume in Telegram"));
+  }
+
+  row.append(main, actionsRow);
+  return row;
+}
+
+function copyButton(labelText: string, payload: string): HTMLButtonElement {
+  const b = button("button", labelText);
+  b.addEventListener("click", () => {
+    void copyText(payload).then((ok) => {
+      if (ok) flashCopied(b);
+    });
+  });
+  return b;
+}
+
+function flashCopied(b: HTMLButtonElement): void {
+  const original = b.textContent;
+  b.textContent = "Copied!";
+  setTimeout(() => {
+    b.textContent = original;
+  }, 1500);
+}
+
+/** navigator.clipboard when available, textarea + execCommand for older WebViews. */
+async function copyText(text: string): Promise<boolean> {
+  const nav = (globalThis as { navigator?: { clipboard?: { writeText?: (t: string) => Promise<void> } } }).navigator;
+  try {
+    if (nav?.clipboard?.writeText) {
+      await nav.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to the legacy path
+  }
+  try {
+    const doc = globalThis.document as
+      | (Document & { execCommand?: (command: string) => boolean })
+      | undefined;
+    if (!doc?.createElement) return false;
+    const area = doc.createElement("textarea");
+    area.value = text;
+    doc.body?.appendChild(area);
+    area.select?.();
+    const ok = doc.execCommand?.("copy");
+    doc.body?.removeChild?.(area);
+    return Boolean(ok);
+  } catch {
+    return false;
+  }
+}
+
+// ── Settings & diagnostics panel ─────────────────────────────────────────────
+
+const TIMEOUT_OPTIONS = [
+  { label: "Off", value: "0" },
+  { label: "10s", value: "10" },
+  { label: "15s", value: "15" },
+  { label: "30s", value: "30" },
+];
+
+function settingsPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLElement {
+  const section = el("section", "phone-panel settings-panel");
+  const caps = state.caps ?? {};
+  const connected = state.status === "connected";
+
+  const deviceRow = el("div", "setting-row");
+  const deviceInput = input("text", "device", state.profile?.device || "g2", "g2");
+  const saveDevice = button("button", "Save device");
+  saveDevice.addEventListener("click", () => actions.onSaveDevice(deviceInput.value));
+  deviceRow.append(label("Device ID", deviceInput), saveDevice);
+
+  const asrModels = Array.isArray(caps.asr_models)
+    ? caps.asr_models.filter((m): m is string => typeof m === "string")
+    : [];
+  const asrPinned = caps.asr_env_pinned === true;
+  const asrSelect = select(
+    "asr_model",
+    asrModels.map((m) => ({ label: m, value: m })),
+    String(caps.asr_active ?? ""),
+  );
+  asrSelect.disabled = !connected || asrModels.length === 0 || asrPinned;
+  asrSelect.addEventListener("change", () => actions.onSettingsSet({ asr_model: asrSelect.value }));
+
+  const timeoutSelect = select(
+    "auto_approve_timeout_s",
+    TIMEOUT_OPTIONS,
+    String(caps.auto_approve_timeout_s ?? 0),
+  );
+  timeoutSelect.disabled = !connected;
+  timeoutSelect.addEventListener("change", () =>
+    actions.onSettingsSet({ auto_approve_timeout_s: Number(timeoutSelect.value) }));
+
+  const pills = el("div", "diag-pills");
+  pills.append(
+    diagPill("profile", caps.profile),
+    diagPill("net_mode", caps.net_mode),
+    diagPill("asr", caps.asr_active),
+    diagPill("active session", state.activeSession),
+  );
+
+  section.append(
+    el("h2", "panel-title", "Settings & Diagnostics"),
+    deviceRow,
+    label("ASR model", asrSelect),
+    label("Auto-approve timeout", timeoutSelect),
+    asrPinned ? el("p", "setting-note", "ASR model pinned by EVENHUB_ASR_MODEL on the bridge") : el("p", "setting-note", "Live settings apply without a bridge restart"),
+    pills,
+  );
+  return section;
+}
+
+function diagPill(labelText: string, value: unknown): HTMLElement {
+  const text = value == null || value === "" ? "—" : String(value);
+  return el("span", "diag-pill", `${labelText}: ${text}`);
+}
+
+// ── shared element helpers ───────────────────────────────────────────────────
 
 function helpBlock(): HTMLElement {
   const block = document.createElement("details");
@@ -94,7 +351,26 @@ function input(type: string, name: string, value: string, placeholder: string): 
   return element;
 }
 
-function label(text: string, control: HTMLInputElement): HTMLLabelElement {
+function select(
+  name: string,
+  options: { label: string; value: string }[],
+  selected: string,
+): HTMLSelectElement {
+  const element = document.createElement("select");
+  element.name = name;
+  for (const opt of options) {
+    const option = el("option", "", opt.label) as HTMLOptionElement;
+    option.value = opt.value;
+    if (opt.value === selected) option.selected = true;
+    element.append(option);
+  }
+  if (options.length > 0 && !options.some((o) => o.value === selected)) {
+    element.value = options[0].value;
+  }
+  return element;
+}
+
+function label(text: string, control: HTMLElement): HTMLLabelElement {
   const element = document.createElement("label");
   const span = el("span", "", text);
   element.append(span, control);

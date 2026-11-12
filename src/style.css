@@ -256,3 +256,214 @@ code {
     min-width: 124px;
   }
 }
+
+/* ── Phone sessions + settings panels ────────────────────────────────────── */
+
+.phone-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-title {
+  margin: 0;
+  color: #0f172a;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.panel-header button {
+  min-height: 44px;
+  min-width: 96px;
+}
+
+.filter-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.filter-tab {
+  flex: 1 1 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #c4cedb;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #2d3b4f;
+  font-size: 13px;
+  font-weight: 700;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.filter-tab.is-active {
+  border-color: #1d4ed8;
+  background: #eef4ff;
+  color: #1d4ed8;
+}
+
+.session-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.session-status {
+  color: #647184;
+  font-size: 14px;
+  padding: 8px 0;
+}
+
+.session-row {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #fbfcfe;
+  transition: background-color 0.15s ease;
+}
+
+.session-row[hidden] {
+  display: none;
+}
+
+.session-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.session-title {
+  color: #172033;
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.origin-badge,
+.active-badge {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.origin-badge.badge-telegram {
+  border: 1px solid #9db8d9;
+  background: #eef4ff;
+  color: #2454a6;
+}
+
+.origin-badge.badge-glasses {
+  border: 1px solid #94c9a9;
+  background: #edf8f1;
+  color: #17663b;
+}
+
+.active-badge {
+  border: 1px solid #c9d2df;
+  background: #ffffff;
+  color: #38465a;
+}
+
+.session-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #647184;
+  font-size: 12px;
+}
+
+.session-meta .session-id {
+  display: inline;
+  width: auto;
+  padding: 2px 6px;
+  border: 1px solid #c6d0dd;
+  border-radius: 5px;
+  background: #f1f4f8;
+  color: #33415c;
+}
+
+.session-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.session-actions button {
+  min-height: 44px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.session-actions button[type="button"] {
+  min-width: 0;
+}
+
+.session-note {
+  color: #647184;
+  font-size: 12px;
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+select {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 11px;
+  border: 1px solid #b8c3d2;
+  border-radius: 7px;
+  color: #0f172a;
+  background: #ffffff;
+}
+
+select:disabled {
+  opacity: 0.45;
+}
+
+.setting-note {
+  color: #647184;
+  font-size: 12px;
+}
+
+.diag-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.diag-pill {
+  padding: 5px 10px;
+  border: 1px solid #c9d2df;
+  border-radius: 999px;
+  background: #f1f4f8;
+  color: #38465a;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}

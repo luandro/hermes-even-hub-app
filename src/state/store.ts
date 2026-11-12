@@ -80,6 +80,8 @@ export interface AppState {
   conn: string;
   sessions: { items: SessionItem[]; active: string | null };
   sessionsLoaded: boolean;
+  /** Bridge capability snapshot from the last hello.ok (profile, ASR, timeout). */
+  caps: Record<string, unknown>;
   history: HistoryState;
   stream: StreamItem[];
   pending: { transcript: string } | null;
@@ -104,6 +106,7 @@ export function initialState(): AppState {
     conn: "connecting",
     sessions: { items: [], active: null },
     sessionsLoaded: false,
+    caps: {},
     history: { loadingFor: null, failedFor: null, refresh: false },
     stream: [],
     pending: null,
@@ -180,7 +183,8 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
     case "hello.ok": {
       // A fresh hello.ok is a (re)connect: queued prompts died with the old
       // bridge process (§C rule 8), so they clear on every path below.
-      const reset = { ...s, prompts: [] as Prompt[], promptHighlight: 0 };
+      const caps = m.caps && typeof m.caps === "object" ? m.caps : {};
+      const reset = { ...s, caps, prompts: [] as Prompt[], promptHighlight: 0 };
       // A reconnect must not move the wearer out of their conversation: the
       // local active id wins; the connection layer re-pins it bridge-side.
       if (s.sessions.active) return reset;

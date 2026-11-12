@@ -5,7 +5,7 @@ import { BridgeClient } from "./net/ws-client";
 import { initialState, applyDisconnected, markDeliveryUncertain, type AppState } from "./state/store";
 import { createHistoryWatch } from "./state/history-watch";
 import { applyServerMessage, type ConnectionFlags } from "./state/connection";
-import { sessionsList } from "./protocol";
+import { sessionsList, sessionsSwitch, settingsSet } from "./protocol";
 import { createLoadingStartup, createSetupStartup, showLoadingPage } from "./ui/render";
 import { loadingText } from "./ui/views";
 import { createPageRenderer, pageRendererDeps } from "./ui/render-queue";
@@ -146,6 +146,10 @@ async function boot(): Promise<void> {
       defaults,
       status: state.conn,
       errors: phoneErrors,
+      sessions: state.sessions.items,
+      activeSession: state.sessions.active,
+      sessionsLoaded: state.sessionsLoaded,
+      caps: state.caps,
     }, {
       onSaveConnect: (url, token) => {
         fireAndForget(saveAndConnect(url, token));
@@ -153,8 +157,41 @@ async function boot(): Promise<void> {
       onDisconnect: () => {
         client.disconnect();
       },
+      onRefreshSessions: () => {
+        client.send(sessionsList());
+      },
+      onSwitchSession: (id) => {
+        client.send(sessionsSwitch(id));
+      },
+      onSettingsSet: (settings) => {
+        client.send(settingsSet(settings));
+      },
+      onSaveDevice: (device) => {
+        fireAndForget(saveDevice(device));
+      },
     });
   };
+
+  /**
+   * Persist the hello device id. It rides the hello handshake, so a live
+   * socket reconnects to pick it up; an offline change just saves.
+   */
+  async function saveDevice(device: string): Promise<void> {
+    if (!profile) return;
+    const candidate = { ...profile, device, updatedAt: Date.now() };
+    const validation = validateConnectionProfile(candidate);
+    if (!validation.valid) {
+      phoneErrors = validation.errors;
+      renderPhone();
+      return;
+    }
+    phoneErrors = [];
+    profile = await saveConnectionProfile(bridge, candidate);
+    if (state.conn === "connected" || state.conn.startsWith("connecting")) {
+      client.connect(profile);
+    }
+    renderPhone();
+  }
 
   const setStatus = (conn: string): void => {
     state = { ...state, conn };
@@ -241,6 +278,9 @@ async function boot(): Promise<void> {
       if (m.t === "hello.ok") startSessionsRetry();
       if (m.t === "sessions") stopSessionsRetry();
       if (m.t === "ack") clearDeliveryTimer(m.id);
+      // The phone panels project these three frames (sessions list, caps,
+      // active badge); the glasses pages ride scheduleRender as before.
+      if (m.t === "hello.ok" || m.t === "sessions" || m.t === "active") renderPhone();
       scheduleRender(state);
       historyWatch.update(prevLoadingFor, state.history.loadingFor);
     },
@@ -268,6 +308,7 @@ async function boot(): Promise<void> {
     const candidate: ConnectionProfile = {
       url,
       token,
+      device: profile?.device,
       activeSession: profile?.activeSession,
       updatedAt: Date.now(),
     };

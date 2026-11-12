@@ -1,9 +1,9 @@
 {
   "name": "hermes-even-hub-app",
   "private": true,
-  "version": "0.2.15",
+  "version": "0.2.16",
   "type": "module",
-  "description": "Even Realities G2 glasses app (Even Hub WebView) — the client half of the G2 × Hermes bridge",
+  "description": "Even Realities G2 glasses app (Even Hub WebView) \u2014 the client half of the G2 \u00d7 Hermes bridge",
   "license": "MIT",
   "repository": {
     "type": "git",

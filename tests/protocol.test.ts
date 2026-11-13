@@ -156,6 +156,46 @@ describe("protocol", () => {
     expect(JSON.parse(promptResponse("req-1", "deny")))
       .toEqual({ t: "prompt.response", id: "req-1", choice: "deny" });
   });
+  it("parses a mirror frame (V3 TG2G, frozen contract)", () => {
+    const raw = JSON.stringify({
+      t: "mirror",
+      id: "g2-leg-1",
+      from: "telegram",
+      turn_id: "turn-42",
+      user: "what's the weather",
+      assistant: "Sunny, 22C.",
+    });
+    expect(parseServer(raw)).toEqual({
+      t: "mirror",
+      id: "g2-leg-1",
+      from: "telegram",
+      turn_id: "turn-42",
+      user: "what's the weather",
+      assistant: "Sunny, 22C.",
+    });
+  });
+  it("rejects bad mirror shapes at parse", () => {
+    const valid = {
+      t: "mirror",
+      id: "g2-leg-1",
+      from: "telegram",
+      turn_id: "turn-42",
+      user: "u",
+      assistant: "a",
+    };
+    const bad: unknown[] = [
+      { t: "mirror" },            // missing fields
+      { ...valid, id: 7 },        // id not a string
+      { ...valid, id: "" },       // id empty
+      { ...valid, from: 1 },
+      { ...valid, turn_id: {} },
+      { ...valid, user: null },
+      { ...valid, assistant: 3 },
+    ];
+    for (const frame of bad) {
+      expect(() => parseServer(JSON.stringify(frame)), JSON.stringify(frame)).toThrow();
+    }
+  });
   it("parses an ack frame", () => {
     const rawOk = JSON.stringify({ t: "ack", id: "msg-1", ok: true });
     expect(parseServer(rawOk)).toEqual({ t: "ack", id: "msg-1", ok: true });

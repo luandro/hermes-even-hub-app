@@ -320,6 +320,25 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
       return m.text.trim()
         ? { ...s, pending: { transcript: m.text }, phase: "review", scrollPage: null }
         : { ...s, phase: "idle", notice: HINTS.noticeTranscriptEmpty };
+    case "mirror": {
+      // V3 TG2G: a completed Telegram turn echoed onto the glasses. Only OUR
+      // leg's turns belong on screen — anything else is another surface's
+      // conversation and the history refresh covers it. Both items land in
+      // this single reduce, so the HUD renders the [TG] line and the reply
+      // as one stream event. Display-only: no state here (and no effect in
+      // the connection layer) may ever answer a mirror (CYCLES #2).
+      if (m.id !== s.sessions.active) return s;
+      return {
+        ...s,
+        history: { loadingFor: null, failedFor: null, refresh: false },
+        stream: [
+          ...s.stream,
+          { kind: "user", text: `[TG] ${m.user}` },
+          { kind: "assistant", text: m.assistant },
+        ],
+        scrollPage: null,
+      };
+    }
     default:
       return s;
   }

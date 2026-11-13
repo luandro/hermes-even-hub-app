@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { applyServerMessage, type ConnectionFlags } from "../src/state/connection";
 import { initialState, applyDisconnected, reduce, type AppState } from "../src/state/store";
-import { sessionsList, sessionsNew, sessionsSwitch } from "../src/protocol";
+import { parseServer, sessionsList, sessionsNew, sessionsSwitch } from "../src/protocol";
 
 const freshFlags = (): ConnectionFlags => ({ helloOk: false, bootResumeDone: false });
 
@@ -343,5 +343,61 @@ describe("applyServerMessage / applyDisconnected: prompts clear on reconnect and
     const next = applyDisconnected(s);
     expect(next.prompts).toEqual([]);
     expect(next.promptHighlight).toBe(0);
+  });
+});
+
+describe("V3 mirror frames (TG2G): Telegram turns mirrored onto the G2 leg", () => {
+  const mirror = (id: string, user: string, assistant: string) => ({
+    t: "mirror" as const,
+    id,
+    from: "telegram",
+    turn_id: "turn-1",
+    user,
+    assistant,
+  });
+
+  const inSession = (): AppState => ({
+    ...initialState(),
+    screen: "session",
+    sessions: { items: [own("g2-1")], active: "g2-1" },
+    stream: [
+      { kind: "user", text: "hello" },
+      { kind: "assistant", text: "hi" },
+    ],
+  });
+
+  it("applies a mirror turn to the active session: [TG] user line then reply, one reduce call", () => {
+    const s1 = reduce(inSession(), mirror("g2-1", "status?", "All good."));
+    expect(s1.stream).toEqual([
+      { kind: "user", text: "hello" },
+      { kind: "assistant", text: "hi" },
+      { kind: "user", text: "[TG] status?" },
+      { kind: "assistant", text: "All good." },
+    ]);
+  });
+
+  it("drops a mirror frame for a non-active session", () => {
+    const s0 = inSession();
+    expect(reduce(s0, mirror("other-leg", "q", "a"))).toBe(s0);
+  });
+
+  it("drops a mirror frame when no session is active", () => {
+    const s0 = initialState();
+    expect(reduce(s0, mirror("g2-1", "q", "a"))).toBe(s0);
+  });
+
+  it("CYCLES #2: a parsed mirror frame never causes an outgoing client message", () => {
+    // Full pipeline: parse (as ws-client does) → applyServerMessage → effects.
+    for (const id of ["g2-1", "other-leg"]) {
+      const raw = JSON.stringify(mirror(id, "q", "a"));
+      const r = applyServerMessage(
+        inSession(),
+        parseServer(raw),
+        { helloOk: true, bootResumeDone: true },
+        null,
+      );
+      expect(r.effects, `mirror id=${id}`).toEqual([]);
+      expect(r.persist, `mirror id=${id}`).toBeNull();
+    }
   });
 });

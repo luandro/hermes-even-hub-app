@@ -53,6 +53,7 @@ export type ServerMsg =
       timeout_choice: string | null;
     }
   | { t: "prompt.resolved"; id: string; choice: string; by: "user" | "timeout" | "other" }
+  | { t: "mirror"; id: string; from: string; turn_id: string; user: string; assistant: string }
   | { t: "error"; msg: string };
 
 const SERVER_TYPES = new Set([
@@ -70,6 +71,7 @@ const SERVER_TYPES = new Set([
   "ack",
   "prompt.request",
   "prompt.resolved",
+  "mirror",
   "error",
 ]);
 
@@ -156,11 +158,22 @@ function validatePromptResolved(m: Record<string, unknown>): void {
     throw new Error("bad prompt.resolved: by");
 }
 
+/** V3 TG2G mirror — display-only echo of a completed Telegram turn (frozen
+ *  contract; user/assistant are plain text, size-capped server-side). */
+function validateMirror(m: Record<string, unknown>): void {
+  if (!isId(m.id)) throw new Error("bad mirror: id");
+  if (typeof m.from !== "string") throw new Error("bad mirror: from");
+  if (typeof m.turn_id !== "string") throw new Error("bad mirror: turn_id");
+  if (typeof m.user !== "string") throw new Error("bad mirror: user");
+  if (typeof m.assistant !== "string") throw new Error("bad mirror: assistant");
+}
+
 export function parseServer(raw: string): ServerMsg {
   const m = JSON.parse(raw);
   if (!m || typeof m.t !== "string" || !SERVER_TYPES.has(m.t))
     throw new Error(`bad server msg: ${raw}`);
   if (m.t === "prompt.request") validatePromptRequest(m);
   else if (m.t === "prompt.resolved") validatePromptResolved(m);
+  else if (m.t === "mirror") validateMirror(m);
   return m as ServerMsg;
 }

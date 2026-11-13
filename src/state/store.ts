@@ -25,9 +25,6 @@ export const HINTS = {
   noticeOffline: "offline · reconnecting…",
   noticeOfflineIdle: "offline · check connection",
   noticeSessionOpenFailed: "couldn't open that session",
-  // A5: a tap on ＋New with nothing to open — the only way to a first session
-  // is the ＋New row highlighted + long-press (or double-tap).
-  hintNewSession: "long-press ＋New to start",
 } as const;
 
 export type Screen = "list" | "session";

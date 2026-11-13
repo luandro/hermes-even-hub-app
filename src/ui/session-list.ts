@@ -43,7 +43,7 @@ export function listableSessions(items: SessionItem[]): SessionItem[] {
 /**
  * Own (speakable) sessions, newest first — the pool for cold-boot resume and
  * failure recovery. A foreign row must never be auto-entered without an
- * explicit tap (pickResumeSession/openCurrent/recoverUnavailableSession).
+ * explicit tap (pickResumeSession/recoverUnavailableSession).
  */
 export function ownSessions(items: SessionItem[]): SessionItem[] {
   return orderedSessions(items.filter(isOwnSession));

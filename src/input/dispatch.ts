@@ -1,6 +1,6 @@
 import { HINTS, defaultOptionIndex, offlineNotice, type AppState, type StreamItem } from "../state/store";
 import { promptResponse, sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../protocol";
-import { isOwnSession, isKnownOwnSession, ownSessions, pickResumeSession, sessionForListIndex } from "../ui/session-list";
+import { isOwnSession, ownSessions, pickResumeSession, sessionForListIndex } from "../ui/session-list";
 import { nextThreadViewportCursor, previousThreadViewportIndex } from "../ui/stream";
 
 export type Gesture = "click" | "doubleClick" | "longPress" | "scrollUp" | "scrollDown";
@@ -105,30 +105,11 @@ export interface ListSnapshot {
   ids: (string | null)[];
 }
 
-/** ＋New highlighted + long-press/double-tap: exactly one sessions.new (A3). */
+/** ＋New tapped/long-pressed/double-tapped: exactly one sessions.new (A3). */
 const startNewSession = (s: AppState): DispatchResult => ({
   state: enterSession(s, null, { newSession: true }),
   effects: [{ kind: "send", frame: sessionsNew() }],
 });
-
-/**
- * A1: a plain tap on ＋New (or with no row info) opens the CURRENT own
- * session — a switch, never a new session. "Current" is the active session
- * when it is ours (or the one we just created), else the newest own session.
- * With no own session at all there is nothing to switch to: show the hint
- * (A5) and send nothing.
- */
-function openCurrent(s: AppState): DispatchResult {
-  const active = s.sessions.active;
-  const currentIsOurs = Boolean(
-    active && (isKnownOwnSession(s.sessions.items, active) || active === s.unconfirmedOwnId),
-  );
-  const id = currentIsOurs ? active : ownSessions(s.sessions.items)[0]?.id ?? null;
-  if (!id) {
-    return { state: { ...s, notice: HINTS.hintNewSession }, effects: [] };
-  }
-  return { state: enterSession(s, id), effects: [{ kind: "send", frame: sessionsSwitch(id) }] };
-}
 
 export function dispatch(
   s: AppState,
@@ -148,16 +129,19 @@ export function dispatch(
     }
     if (!s.sessionsLoaded) return { state: s, effects: [] };
     if (g === "longPress") {
-      // A3 requires ＋New highlighted; a stray long-press with no row info
-      // must not mint sessions (the duplicate-session bug class).
-      if (index === 0) return startNewSession(s);
+      // No row info ≡ ＋New (proto3 omits index 0), same as the click branch:
+      // the hardware long-press often carries no index at all.
+      const li = index ?? 0;
+      if (li === 0) return startNewSession(s);
       return { state: s, effects: [] };
     }
     if (g === "click") {
       const i = index ?? 0; // no row info ≡ ＋New (proto3 omits index 0)
       if (i < 0) return { state: s, effects: [] }; // ambiguous row name: ignored
       if (i === 0) {
-        return openCurrent(s);
+        // A single tap on ＋New IS the create gesture (user directive); a
+        // plain tap must not silently reopen whatever session is current.
+        return startNewSession(s);
       }
       // Falls back to live state when no snapshot is supplied, so existing
       // callers keep their current behaviour.

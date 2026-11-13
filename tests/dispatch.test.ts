@@ -25,7 +25,7 @@ describe("dispatch: list", () => {
     expect(r.state.screen).toBe("list");
   });
 
-  it("A1: a tap with no row info or on ＋New opens the current own session (switch, never new)", () => {
+  it("a single tap on ＋New (or with no row info) starts a new session (user directive)", () => {
     const s = listWith([
       { id: "a", title: "A", updated: 1 },
       { id: "b", title: "B", updated: 2 },
@@ -33,59 +33,19 @@ describe("dispatch: list", () => {
     for (const index of [undefined, 0]) {
       const r = dispatch(s, "click", index);
       expect(r.state.screen).toBe("session");
-      expect(r.state.sessions.active).toBe("b"); // newest own when nothing is active
-      expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("b") }]);
+      expect(r.state.expectingNewSession).toBe(true);
+      expect(r.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
     }
   });
-  it("A1: the active own session is the current one, even when it is not the newest", () => {
-    const s: AppState = {
-      ...listWith([{ id: "a", title: "A", updated: 1 }, { id: "b", title: "B", updated: 2 }]),
-      sessions: {
-        items: [
-          { id: "a", title: "A", updated: 1 },
-          { id: "b", title: "B", updated: 2 },
-        ],
-        active: "a",
-      },
-    };
-    const r = dispatch(s, "click", 0);
-    expect(r.state.sessions.active).toBe("a");
-    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("a") }]);
-  });
-  it("A1: a foreign active session falls back to the newest own", () => {
-    const s: AppState = {
-      ...listWith([{ id: "a", title: "A", updated: 1 }]),
-      sessions: {
-        items: [
-          { id: "tg", title: "Telegram", updated: 9, foreign: true },
-          { id: "a", title: "A", updated: 1 },
-        ],
-        active: "tg",
-      },
-    };
-    const r = dispatch(s, "click", undefined);
-    expect(r.state.sessions.active).toBe("a");
-    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("a") }]);
-  });
-  it("A1: the just-created session (unconfirmedOwnId) is the current one", () => {
-    const s: AppState = {
-      ...listWith([{ id: "old", title: "Old", updated: 5 }]),
-      unconfirmedOwnId: "fresh-9",
-      sessions: { items: [{ id: "old", title: "Old", updated: 5 }], active: "fresh-9" },
-    };
-    const r = dispatch(s, "click", 0);
-    expect(r.state.sessions.active).toBe("fresh-9");
-    expect(r.effects).toEqual([{ kind: "send", frame: sessionsSwitch("fresh-9") }]);
-  });
-  it("A5: a tap with no own session shows the long-press ＋New hint and sends nothing", () => {
+  it("a single tap with no own session starts the first one (no hint detour)", () => {
     const s = listWith([
       { id: "tg", title: "Telegram", foreign: true },
       { id: "ro", title: "Readonly", read_only: true },
     ]);
     const r = dispatch(s, "click", 0);
-    expect(r.state.screen).toBe("list");
-    expect(r.state.notice).toBe("long-press ＋New to start");
-    expect(r.effects).toEqual([]);
+    expect(r.state.screen).toBe("session");
+    expect(r.state.expectingNewSession).toBe(true);
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
   });
   it("index 1 opens the first existing session", () => {
     const r = dispatch(listWith([{ id: "a", title: "A" }, { id: "b", title: "B" }]), "click", 1);
@@ -204,11 +164,11 @@ describe("dispatch: list", () => {
     expect(r.state.expectingNewSession).toBe(true);
     expect(r.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
   });
-  it("A3 ruling: long-press with no row info is a no-op (a stray long-press must not mint sessions)", () => {
+  it("long-press with no row info starts a new session (no row info ≡ ＋New, proto3)", () => {
     const r = dispatch(listWith([{ id: "a", title: "A" }]), "longPress", undefined);
-    expect(r.state.screen).toBe("list");
-    expect(r.effects).toEqual([]);
-    expect(r.state.expectingNewSession).toBe(false);
+    expect(r.state.screen).toBe("session");
+    expect(r.state.expectingNewSession).toBe(true);
+    expect(r.effects).toEqual([{ kind: "send", frame: sessionsNew() }]);
   });
   it("A3: double-tap with ＋New highlighted sends exactly one sessions.new", () => {
     const r = dispatch(listWith([{ id: "a", title: "A" }]), "doubleClick", 0);

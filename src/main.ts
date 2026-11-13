@@ -248,14 +248,12 @@ async function boot(): Promise<void> {
     },
   });
 
-  // List-screen tap arbitration (held ＋New clicks, combined CLICK +
-  // DOUBLE_CLICK sequences) lives in input/list-gestures; the prompt-gate
-  // arbiter above stays here.
+  // List-screen gesture routing (row resolution per F10; a ＋New tap applies
+  // immediately — dispatch decides create/switch/exit) lives in
+  // input/list-gestures; the prompt-gate arbiter above stays here.
   const listGestures = createListGestures({
-    windowMs: TAP_ARBITER_MS,
     promptGateActive,
     promptTap: tapArbiter,
-    onListScreen: () => state.screen === "list",
     rows: () => pages.snapshot().rows,
     apply: applyGesture,
   });
@@ -275,10 +273,9 @@ async function boot(): Promise<void> {
       // A held tap must never answer a prompt that changed underneath it
       // (answered, resolved, cleared by hello.ok) — only the prompt it saw.
       if (state.prompts[0]?.id !== prevPromptHead) {
+        // A prompt landing mid-window also ends any held tap: the next
+        // gestures belong to the prompt gate, not the previous screen.
         tapArbiter.cancel();
-        // A prompt landing mid-window also ends any held ＋New click: the
-        // next gestures belong to the prompt gate, not the list.
-        listGestures.cancel();
       }
       // Any freshly-set notice (error frame, empty transcript, …) auto-expires.
       if (state.notice && state.notice !== prevNotice) armNoticeTimer();
@@ -298,7 +295,6 @@ async function boot(): Promise<void> {
       clearAllDeliveryTimers();
       // Prompts die with the socket (§C rule 8); a held tap must die with them.
       tapArbiter.cancel();
-      listGestures.cancel();
       // Recording into a dropped socket would produce a turn that can never be
       // delivered — stop the mic and fall back to idle.
       if (state.phase === "recording") {

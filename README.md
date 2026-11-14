@@ -128,6 +128,16 @@ npm run pack
 
 Produces `hermes-even-hub-app.ehpk`. Sideload via `evenhub qr` during development.
 
+## Changelog
+
+### 0.4.2
+
+- Version-synced with bridge 0.4.2 (V3.1 topic waves).
+- `mirror` frames now carry an optional `cid` — the mirrored pair's shared
+  `conversation_id` (`src/protocol.ts`). It is pairing signal only: present when the
+  bridge knows the conversation id, absent otherwise; display behavior is unchanged
+  either way (see the bridge's `docs/protocol.md`).
+
 ## References
 
 - [Even Hub docs](https://hub.evenrealities.com/docs/getting-started/installation)

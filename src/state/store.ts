@@ -94,6 +94,10 @@ export interface AppState {
   expectingNewSession: boolean;
   /** The bridge-assigned id of OUR just-created session, not yet listed own. */
   unconfirmedOwnId: string | null;
+  /** Live-linked conversations learned from mirror frames (V3.1 W3): pair
+   *  conversation_id → the session row id that RECEIVED the frame. Only cids
+   *  in this map group their list rows; everything else renders as before. */
+  mirrorCids: Record<string, string>;
 }
 
 export function initialState(): AppState {
@@ -115,6 +119,7 @@ export function initialState(): AppState {
     readonlyNoHistory: false,
     expectingNewSession: false,
     unconfirmedOwnId: null,
+    mirrorCids: {},
   };
 }
 
@@ -325,8 +330,13 @@ export function reduce(s: AppState, m: ServerMsg): AppState {
       // as one stream event. Display-only: no state here (and no effect in
       // the connection layer) may ever answer a mirror (CYCLES #2).
       if (m.id !== s.sessions.active) return s;
+      // V3.1 W3: a frame with `cid` names the pair's conversation — remember
+      // which row received it so the session list can merge the paired legs
+      // into one row. A missing or malformed cid records nothing.
+      const cid = typeof m.cid === "string" && m.cid ? m.cid : null;
       return {
         ...s,
+        ...(cid ? { mirrorCids: { ...s.mirrorCids, [cid]: m.id } } : {}),
         history: { loadingFor: null, failedFor: null, refresh: false },
         stream: [
           ...s.stream,

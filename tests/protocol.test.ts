@@ -57,6 +57,24 @@ describe("protocol", () => {
     const parsed = parseServer(raw);
     expect(parsed).toEqual({ t: "notice", text: "Some replies were lost while the glasses were offline." });
   });
+  it("parses a mirror frame with the optional cid pairing signal (V3.1 W3)", () => {
+    const raw = JSON.stringify({
+      t: "mirror", id: "g2-1", from: "telegram", turn_id: "t1",
+      user: "hi", assistant: "ok", cid: "conv-1",
+    });
+    const parsed = parseServer(raw);
+    expect(parsed.t).toBe("mirror");
+    if (parsed.t === "mirror") expect(parsed.cid).toBe("conv-1");
+  });
+  it("parses a mirror frame without cid (older bridges omit the field)", () => {
+    const raw = JSON.stringify({
+      t: "mirror", id: "g2-1", from: "telegram", turn_id: "t1",
+      user: "hi", assistant: "ok",
+    });
+    const parsed = parseServer(raw);
+    expect(parsed.t).toBe("mirror");
+    if (parsed.t === "mirror") expect(parsed.cid).toBeUndefined();
+  });
   it("builds a text frame with optional id", async () => {
     const { textMsg } = await import("../src/protocol");
     expect(JSON.parse(textMsg("hello"))).toEqual({ t: "text", text: "hello" });

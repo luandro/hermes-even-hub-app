@@ -53,7 +53,7 @@ export type ServerMsg =
       timeout_choice: string | null;
     }
   | { t: "prompt.resolved"; id: string; choice: string; by: "user" | "timeout" | "other" }
-  | { t: "mirror"; id: string; from: string; turn_id: string; user: string; assistant: string }
+  | { t: "mirror"; id: string; from: string; turn_id: string; user: string; assistant: string; cid?: string }
   | { t: "error"; msg: string };
 
 const SERVER_TYPES = new Set([

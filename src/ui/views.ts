@@ -42,8 +42,9 @@ export function buildListView(s: AppState, nowSeconds?: number): ListView {
   const now = nowSeconds ?? Math.floor(Date.now() / 1000);
   // ONE filtered array feeds both rows and ids: the glasses report a tap as an
   // index into the rows on screen, so ids[i] must be the session rows[i] was
-  // drawn from — foreign/read-only sessions never enter the mapping.
-  const listable = listableSessions(s.sessions.items);
+  // drawn from — foreign/read-only sessions never enter the mapping. Mirror-
+  // learned cids (V3.1 W3) merge live-linked legs into that same single array.
+  const listable = listableSessions(s.sessions.items, s.mirrorCids);
   return {
     rows: [NEW_SESSION_ROW, ...listable.map((item) => formatSessionRow(item, s.sessions.active, now))],
     ids: [null, ...listable.map((item) => item.id)],

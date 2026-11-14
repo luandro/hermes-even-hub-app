@@ -31,13 +31,65 @@ export function isOwnSession(item: SessionItem): boolean {
 }
 
 /**
+ * V3.1 W3: collapse live-linked conversation legs into one row. Only a cid the
+ * app LEARNED from a mirror frame groups its rows (`mirrorCids`, cid → the row
+ * that received the frame): that row becomes the merged row — its id, title
+ * and origin stay (so tapping opens the current leg) while `updated` takes the
+ * group's newest member, keeping the conversation at its latest-activity spot.
+ *
+ * Fail-soft by construction: an empty map, a cid matching no row, or a group
+ * whose receiving row is absent (or no longer carries the cid) merges nothing,
+ * so non-mirrored sessions — including V2 handoff pairs that share a
+ * conversation_id without a live link — render exactly as before.
+ */
+export function mergeMirrorLegs(
+  items: SessionItem[],
+  mirrorCids: Record<string, string>,
+): SessionItem[] {
+  const keys = Object.keys(mirrorCids);
+  if (keys.length === 0) return items;
+
+  const receiverOf = new Map(items.map((i) => [i.id, i] as const));
+  // A cid can group rows only when its receiving row is listed and still
+  // belongs to that conversation.
+  const groupable = new Set(
+    keys.filter((cid) => {
+      const receiver = receiverOf.get(mirrorCids[cid]);
+      return receiver !== undefined && receiver.conversation_id === cid;
+    }),
+  );
+  if (groupable.size === 0) return items;
+
+  const drop = new Set<string>();
+  const newestOf = new Map<string, number>();
+  for (const item of items) {
+    const cid = item.conversation_id;
+    if (!cid || !groupable.has(cid)) continue;
+    const receiverId = mirrorCids[cid];
+    if (item.id === receiverId) continue;
+    drop.add(item.id);
+    const receiver = receiverOf.get(receiverId)!; // groupable ⇒ present
+    newestOf.set(receiverId, Math.max(newestOf.get(receiverId) ?? receiver.updated, item.updated));
+  }
+  if (drop.size === 0) return items;
+
+  return items
+    .filter((i) => !drop.has(i.id))
+    .map((i) => (newestOf.has(i.id) ? { ...i, updated: newestOf.get(i.id)! } : i));
+}
+
+/**
  * The sessions that may appear as list rows, newest first: every non-read-only
  * row — own rows plus resumable foreign rows (V2: a listed foreign row taps
  * into a cross-surface handoff). Rows AND ids derive from this one array, so
- * row i always resolves to ids[i].
+ * row i always resolves to ids[i]. `mirrorCids` (V3.1 W3) merges live-linked
+ * legs of one conversation into a single row first.
  */
-export function listableSessions(items: SessionItem[]): SessionItem[] {
-  return orderedSessions(items.filter((item) => !item.read_only));
+export function listableSessions(
+  items: SessionItem[],
+  mirrorCids: Record<string, string> = {},
+): SessionItem[] {
+  return orderedSessions(mergeMirrorLegs(items, mirrorCids).filter((item) => !item.read_only));
 }
 
 /**
@@ -76,9 +128,13 @@ export function pickResumeSession(
   return ownSessions(items)[0]?.id ?? null;
 }
 
-export function sessionForListIndex(items: SessionItem[], index: number): SessionItem | undefined {
+export function sessionForListIndex(
+  items: SessionItem[],
+  index: number,
+  mirrorCids: Record<string, string> = {},
+): SessionItem | undefined {
   if (index <= 0) return undefined;
-  return listableSessions(items)[index - 1];
+  return listableSessions(items, mirrorCids)[index - 1];
 }
 
 export function displayTitle(title: string): string {
@@ -110,10 +166,11 @@ export function sessionListRows(
   items: SessionItem[],
   active: string | null,
   nowSeconds = Math.floor(Date.now() / 1000),
+  mirrorCids: Record<string, string> = {},
 ): string[] {
   return [
     NEW_SESSION_ROW,
-    ...listableSessions(items).map((item) => formatSessionRow(item, active, nowSeconds)),
+    ...listableSessions(items, mirrorCids).map((item) => formatSessionRow(item, active, nowSeconds)),
   ];
 }
 

@@ -144,8 +144,11 @@ export function dispatch(
         return startNewSession(s);
       }
       // Falls back to live state when no snapshot is supplied, so existing
-      // callers keep their current behaviour.
-      const id = shown ? shown.ids[i] ?? null : sessionForListIndex(s.sessions.items, i)?.id ?? null;
+      // callers keep their current behaviour. The mirror-cid map must match
+      // the one buildListView merged the drawn rows with (V3.1 W3).
+      const id = shown
+        ? shown.ids[i] ?? null
+        : sessionForListIndex(s.sessions.items, i, s.mirrorCids)?.id ?? null;
       if (!id) return { state: s, effects: [] };
       const item = s.sessions.items.find((x) => x.id === id);
       // Defense-in-depth for stale on-screen lists: a read-only id that can no

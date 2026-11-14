@@ -4,6 +4,7 @@ import {
   isOwnSession,
   listableSessions,
   pickResumeSession,
+  sessionForListIndex,
   sessionListRows,
 } from "../src/ui/session-list";
 import type { SessionItem } from "../src/protocol";
@@ -101,6 +102,70 @@ describe("formatSessionRow origin tags", () => {
   });
   it("strips a leading lock glyph from own rows too and leaves them untagged", () => {
     expect(tagged({ ...own("a", 1), title: "🔒 Locked own" })).toBe("  now Locked own");
+  });
+});
+
+describe("mirror leg merge (V3.1 W3): one row per live-linked conversation", () => {
+  // The observed bug: after a Telegram turn the paired [TG] leg surfaces as
+  // its own newer row above the glasses row of the SAME conversation.
+  const g2Leg: SessionItem = {
+    id: "g2-1", title: "Connectivity ping check", updated: 100,
+    conversation_id: "conv-1",
+  };
+  const tgLeg: SessionItem = {
+    id: "tg-1", title: "Connectivity ping check", updated: 900,
+    conversation_id: "conv-1", foreign: true, platform: "telegram",
+  };
+  const map = { "conv-1": "g2-1" }; // learned from the mirror frame's cid
+  const unmergedRows = [
+    NEW_SESSION_ROW,
+    "  now [TG] Connectivity ping check", // tg leg (900) is newer → on top
+    "● 13m Connectivity ping check", // the glasses leg itself
+  ];
+
+  it("merges rows with the same learned cid into one, titled by the receiving leg", () => {
+    expect(sessionListRows([tgLeg, g2Leg], "g2-1", 900, map)).toEqual([
+      NEW_SESSION_ROW,
+      "● now Connectivity ping check",
+    ]);
+  });
+
+  it("without a learned cid (frame without cid / older bridge) rows are exactly as today", () => {
+    expect(sessionListRows([tgLeg, g2Leg], "g2-1", 900)).toEqual(unmergedRows);
+    expect(sessionListRows([tgLeg, g2Leg], "g2-1", 900, {})).toEqual(unmergedRows);
+  });
+
+  it("a learned cid matching no row changes nothing", () => {
+    expect(sessionListRows([tgLeg, g2Leg], "g2-1", 900, { "conv-9": "g2-9" }))
+      .toEqual(unmergedRows);
+  });
+
+  it("a cid whose receiving row is absent from the list merges nothing", () => {
+    expect(sessionListRows([tgLeg, g2Leg], "g2-1", 900, { "conv-1": "g2-gone" }))
+      .toEqual(unmergedRows);
+  });
+
+  it("rows sharing a conversation_id that was never mirror-learned stay separate (V2 handoff)", () => {
+    // A handoff pair shares conversation_id without a live link: no mirror
+    // frame ever named that cid, so the rows must NOT merge.
+    const child: SessionItem = { id: "child-1", title: "Forked", updated: 50, conversation_id: "conv-2" };
+    const parent: SessionItem = { id: "parent-1", title: "Original", updated: 900, conversation_id: "conv-2" };
+    expect(listableSessions([child, parent]).map((i) => i.id))
+      .toEqual(["parent-1", "child-1"]);
+  });
+
+  it("the merged row sorts by the conversation's latest activity", () => {
+    const other: SessionItem = { id: "other", title: "Other", updated: 500 };
+    expect(listableSessions([g2Leg, tgLeg, other], map).map((i) => i.id))
+      .toEqual(["g2-1", "other"]); // merged row carries updated=900 from the tg leg
+  });
+
+  it("tapping the merged row opens the receiving leg (row→id mapping stays consistent)", () => {
+    expect(listableSessions([tgLeg, g2Leg], map).map((i) => i.id)).toEqual(["g2-1"]);
+    expect(sessionForListIndex([tgLeg, g2Leg], 1, map)?.id).toBe("g2-1");
+    // and without the map the mapping is today's two-row mapping
+    expect(sessionForListIndex([tgLeg, g2Leg], 1)?.id).toBe("tg-1");
+    expect(sessionForListIndex([tgLeg, g2Leg], 2)?.id).toBe("g2-1");
   });
 });
 

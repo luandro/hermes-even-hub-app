@@ -764,6 +764,50 @@ describe("connDot", () => {
   });
 });
 
+describe("reduce: mirror frames record the pairing cid (V3.1 W3)", () => {
+  function inSession(): AppState {
+    return {
+      ...initialState(),
+      screen: "session",
+      sessions: { items: [{ id: "g2-1", title: "Mine", updated: 1 }], active: "g2-1" },
+    };
+  }
+
+  it("applies the turn and records cid → the row id that received the frame", () => {
+    const next = reduce(inSession(), {
+      t: "mirror", id: "g2-1", from: "telegram", turn_id: "t1",
+      user: "hi", assistant: "ok", cid: "conv-1",
+    });
+    expect(next.mirrorCids).toEqual({ "conv-1": "g2-1" });
+    expect(next.stream).toEqual([
+      { kind: "user", text: "[TG] hi" },
+      { kind: "assistant", text: "ok" },
+    ]);
+  });
+
+  it("a frame without cid applies the turn but records nothing", () => {
+    const next = reduce(inSession(), {
+      t: "mirror", id: "g2-1", from: "telegram", turn_id: "t1",
+      user: "hi", assistant: "ok",
+    });
+    expect(next.mirrorCids).toEqual({});
+    expect(next.stream).toEqual([
+      { kind: "user", text: "[TG] hi" },
+      { kind: "assistant", text: "ok" },
+    ]);
+  });
+
+  it("a frame for a session that is not active records nothing and changes nothing", () => {
+    const before = inSession();
+    const next = reduce(before, {
+      t: "mirror", id: "g2-other", from: "telegram", turn_id: "t1",
+      user: "hi", assistant: "ok", cid: "conv-1",
+    });
+    expect(next).toBe(before);
+    expect(next.mirrorCids).toEqual({});
+  });
+});
+
 describe("reduce: error frames", () => {
   it("routes an error frame to notice and leaves conn alone (dot stays honest)", () => {
     const s: AppState = { ...initialState(), conn: "connected" };

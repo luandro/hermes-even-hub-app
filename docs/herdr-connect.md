@@ -69,8 +69,8 @@ Hermes setup → **Herdr relay (optional)** panel:
 
 The status dot next to the bridge dot shows `◇ herdr connected`, and Herdr
 terminals appear in the unified session list. Clearing both fields and saving
-turns the leg off — on production builds (no `VITE_HERDR_URL`/`VITE_HERDR_TOKEN`
-at build time). On a dev build with those env vars set, the env value re-fills
+turns the leg off — whenever no `VITE_HERDR_URL`/`VITE_HERDR_TOKEN`
+reaches the build (`vite build` reads `.env.local` too). On a build with those set, the env value re-fills
 the empty field and the leg stays on; that is a build-time-default quirk, not a
 bug to fix here.
 

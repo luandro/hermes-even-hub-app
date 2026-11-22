@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   initialState, reduce, barText, connDot, offlineNotice,
-  applyDisconnected, HINTS,
+  applyDisconnected,
   type AppState, type StreamItem,
 } from "../src/state/store";
 
@@ -137,7 +137,7 @@ describe("reduce: sessions", () => {
       ...initialState(),
       screen: "session",
       sessions: { items: [{ id: "old", title: "Old", updated: 1 }], active: "selected" },
-      history: { loadingFor: "selected", failedFor: null },
+      history: { loadingFor: "selected", failedFor: null, refresh: false },
     };
 
     const next = reduce(s, {
@@ -155,8 +155,8 @@ describe("reduce: sessions", () => {
       screen: "session",
       sessions: {
         items: [
-          { id: "ro", title: "Read-only", read_only: true },
-          { id: "owned", title: "Owned", read_only: false },
+          { id: "ro", title: "Read-only", updated: 1, read_only: true },
+          { id: "owned", title: "Owned", updated: 1, read_only: false },
         ],
         active: "ro",
       },
@@ -218,7 +218,7 @@ describe("reduce: sessions", () => {
       turn: "working" as const,
       scrollPage: 2,
       sessions: { items: [], active: "s1" },
-      history: { loadingFor: "s1", failedFor: null },
+      history: { loadingFor: "s1", failedFor: null, refresh: false },
     };
 
     const next = reduce(s, { t: "history", id: "s1", items, ok: true });
@@ -234,7 +234,7 @@ describe("reduce: sessions", () => {
     const s: AppState = {
       ...initialState(),
       sessions: { items: [], active: "current" },
-      history: { loadingFor: "current", failedFor: null },
+      history: { loadingFor: "current", failedFor: null, refresh: false },
       stream: [{ kind: "user", text: "keep me" }],
     };
 
@@ -246,7 +246,7 @@ describe("reduce: sessions", () => {
     const s: AppState = {
       ...initialState(),
       sessions: { items: [], active: "old" },
-      history: { loadingFor: "selected", failedFor: null },
+      history: { loadingFor: "selected", failedFor: null, refresh: false },
     };
 
     const next = reduce(s, {
@@ -683,7 +683,7 @@ describe("barText", () => {
       ...base,
       phase: "idle",
       sessions: { items: [], active: "s1" },
-      history: { loadingFor: "s1", failedFor: null },
+      history: { loadingFor: "s1", failedFor: null, refresh: false },
     })).toBe("loading session...");
   });
   it("working names the active tool", () => {
@@ -934,7 +934,7 @@ describe("ack and delivery status", () => {
       stream: [{ kind: "user", text: "second", id: "t3", delivery: "pending" }],
     };
     const nextAll = markDeliveryUncertain(sAll);
-    expect(nextAll.stream[0].delivery).toBe("uncertain");
+    expect((nextAll.stream[0] as { delivery?: string }).delivery).toBe("uncertain");
     expect(nextAll.turn).toBe("idle");
     expect(nextAll.notice).toBe("not delivered · tap to resend");
   });

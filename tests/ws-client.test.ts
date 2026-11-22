@@ -17,8 +17,10 @@ class FakeWS {
   onerror?: () => void;
   sent: unknown[] = [];
   readyState = 1;
+  url: string;
 
-  constructor(public url: string) {
+  constructor(url: string) {
+    this.url = url;
     FakeWS.last = this;
     FakeWS.opened.push(this);
   }

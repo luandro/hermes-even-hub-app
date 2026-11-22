@@ -98,7 +98,7 @@ describe("applyServerMessage: hello.ok re-pin reads the id from BEFORE the reduc
       freshFlags(),
     );
   }
-  const rePin = (frame: string) => [
+  const rePin = (_frame: string) => [
     { kind: "send", frame: sessionsSwitch("mine") },
     { kind: "send", frame: sessionsList() },
   ];

@@ -1,4 +1,5 @@
 import type { EvenAppBridge } from "@evenrealities/even_hub_sdk";
+import type { HerdrEndpoint } from "../herdr/model";
 
 export interface ConnectionProfile {
   url: string;
@@ -6,6 +7,13 @@ export interface ConnectionProfile {
   /** Optional hello device id (1-64 chars); omitted ⇒ the bridge defaults to "g2". */
   device?: string;
   activeSession?: string;
+  /**
+   * Phase 2 Herdr relay section. Missing/empty = feature OFF — the app behaves
+   * exactly as pre-Phase-2 (no socket, no rows, no screen). Deliberately NOT
+   * part of validateConnectionProfile: a bad relay URL degrades silently
+   * instead of blocking the bridge connect.
+   */
+  herdr?: HerdrEndpoint;
   updatedAt: number;
 }
 
@@ -26,8 +34,17 @@ export function normalizeConnectionProfile(profile: ConnectionProfile): Connecti
     token: profile.token.trim(),
     device: normalizeDevice(profile.device),
     activeSession: profile.activeSession?.trim() || undefined,
+    herdr: normalizeHerdrSection(profile.herdr),
     updatedAt: profile.updatedAt,
   };
+}
+
+/** Keep the herdr section only when some part of it is configured. */
+function normalizeHerdrSection(herdr: HerdrEndpoint | undefined): HerdrEndpoint | undefined {
+  if (!herdr) return undefined;
+  const url = herdr.url.trim();
+  const token = herdr.token.trim();
+  return url || token ? { url, token } : undefined;
 }
 
 /** Device id: trimmed, 1-64 chars, anything else falls back to the default. */
@@ -131,9 +148,16 @@ function parseProfile(raw: string): ConnectionProfile | null {
       token: value.token,
       device: typeof value.device === "string" ? value.device : undefined,
       activeSession: typeof value.activeSession === "string" ? value.activeSession : undefined,
+      herdr: isHerdrSection(value.herdr) ? value.herdr : undefined,
       updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now(),
     });
   } catch {
     return null;
   }
+}
+
+function isHerdrSection(v: unknown): v is HerdrEndpoint {
+  if (!v || typeof v !== "object") return false;
+  const section = v as Record<string, unknown>;
+  return typeof section.url === "string" && typeof section.token === "string";
 }

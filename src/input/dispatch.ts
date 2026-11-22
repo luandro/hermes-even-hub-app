@@ -2,6 +2,8 @@ import { HINTS, defaultOptionIndex, offlineNotice, type AppState, type StreamIte
 import { promptResponse, sessionsNew, sessionsSwitch, textMsg, sessionsList } from "../protocol";
 import { isOwnSession, ownSessions, pickResumeSession, sessionForListIndex } from "../ui/session-list";
 import { nextThreadViewportCursor, previousThreadViewportIndex } from "../ui/stream";
+import type { AnySessionId } from "../herdr/model";
+import { closeHerdrSession, openHerdrSession } from "../state/herdr";
 
 export type Gesture = "click" | "doubleClick" | "longPress" | "scrollUp" | "scrollDown";
 
@@ -94,15 +96,18 @@ export function recoverUnavailableSession(
 }
 
 /**
- * The session ids of the rows currently DISPLAYED, captured at render time.
- * `ids[i]` is the session for row `i`, or null for the ＋New row.
+ * The TAGGED session ids of the rows currently DISPLAYED, captured at render
+ * time. `ids[i]` is `{kind:"hermes", id}` / `{kind:"herdr", address}` for row
+ * `i`, or null for the ＋New row and the herdr section header.
  *
  * A tap arrives as an index into what is on screen, and the list re-sorts by
  * recency whenever a `sessions` frame lands — so the index has to be resolved
  * against the snapshot the wearer was looking at, not against live state.
+ * The `kind` tag is what makes it a TYPE ERROR for a Herdr address to flow
+ * into a Hermes-only operation downstream.
  */
 export interface ListSnapshot {
-  ids: (string | null)[];
+  ids: (AnySessionId | null)[];
 }
 
 /** ＋New tapped/long-pressed/double-tapped: exactly one sessions.new (A3). */
@@ -145,11 +150,21 @@ export function dispatch(
       }
       // Falls back to live state when no snapshot is supplied, so existing
       // callers keep their current behaviour. The mirror-cid map must match
-      // the one buildListView merged the drawn rows with (V3.1 W3).
-      const id = shown
+      // the one buildListView merged the drawn rows with (V3.1 W3). The
+      // selection is the TAGGED union: a herdr row opens the read-only herdr
+      // screen and can never continue into the Hermes switch flow below —
+      // `sel.id` only exists after narrowing to kind "hermes".
+      const sel: AnySessionId | null = shown
         ? shown.ids[i] ?? null
-        : sessionForListIndex(s.sessions.items, i, s.mirrorCids)?.id ?? null;
-      if (!id) return { state: s, effects: [] };
+        : ((): AnySessionId | null => {
+            const live = sessionForListIndex(s.sessions.items, i, s.mirrorCids);
+            return live ? { kind: "hermes", id: live.id } : null;
+          })();
+      if (!sel) return { state: s, effects: [] };
+      if (sel.kind === "herdr") {
+        return { state: openHerdrSession(s, sel.address), effects: [] };
+      }
+      const id = sel.id;
       const item = s.sessions.items.find((x) => x.id === id);
       // Defense-in-depth for stale on-screen lists: a read-only id that can no
       // longer appear in a rendered row still opens the local read-only view
@@ -175,6 +190,13 @@ export function dispatch(
       }
       return { state: enterSession(s, id), effects: [{ kind: "send", frame: sessionsSwitch(id) }] };
     }
+    return { state: s, effects: [] };
+  }
+  // screen === "herdr-session": READ-ONLY by construction. Double-click is the
+  // Back gesture; every other gesture is a no-op — no mic, no send, no screen
+  // change. There is no input path on this screen in Phase 2.
+  if (s.screen === "herdr-session") {
+    if (g === "doubleClick") return { state: closeHerdrSession(s), effects: [] };
     return { state: s, effects: [] };
   }
   // screen === "session"

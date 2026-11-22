@@ -189,12 +189,21 @@ export function formatSessionRow(item: SessionItem, active: string | null, nowSe
   // Older bridges prefix locked titles with 🔒; it renders as nothing on the
   // display, so strip it before tagging.
   const rawTitle = sessionRowTitle(item).replace(/^🔒\s*/, "");
-  const title = truncateTitle(
-    originTag(item) + rawTitle,
+  return composeListRow(prefix, originTag(item) + rawTitle);
+}
+
+/**
+ * Fit `prefix + title` into one list row (576px / 64 chars / 63 UTF-8 bytes).
+ * Shared by the Hermes and Herdr row formers so both worlds truncate
+ * identically on the display.
+ */
+export function composeListRow(prefix: string, title: string): string {
+  const fitted = truncateTitle(
+    title,
     LIST_ROW_WIDTH_PX - getTextWidth(prefix),
     MAX_ITEM_CHARS - prefix.length,
   );
-  return truncateBytes(prefix + title, MAX_ITEM_BYTES);
+  return truncateBytes(prefix + fitted, MAX_ITEM_BYTES);
 }
 
 /** Relative age for display ("now", "5m", "3h", "2d") — shared by the glasses

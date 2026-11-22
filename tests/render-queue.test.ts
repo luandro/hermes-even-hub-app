@@ -33,6 +33,7 @@ function makeDeps(opts?: { browsing?: boolean; stallList?: boolean }) {
     }),
     showSessionPage: vi.fn(async () => { calls.push("session-page"); }),
     renderSession: vi.fn(async (s: AppState) => { calls.push(`session-render:${s.screen}`); }),
+    renderHerdrSession: vi.fn(async (s: AppState) => { calls.push(`herdr-render:${s.screen}`); }),
     isBrowsing: () => opts?.browsing ?? false,
     release: () => releaseList?.(),
   };
@@ -133,7 +134,7 @@ describe("createPageRenderer: page-kind transitions and list guards", () => {
     const pages = createPageRenderer(deps);
     pages.render(listState());
     await flush();
-    expect(pages.snapshot().ids).toEqual([null, "a"]);
+    expect(pages.snapshot().ids).toEqual([null, { kind: "hermes", id: "a" }]);
   });
 
   it("renders the loading page until sessions hydrate", async () => {

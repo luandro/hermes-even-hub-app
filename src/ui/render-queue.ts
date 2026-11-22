@@ -1,6 +1,8 @@
 import type { AppState } from "../state/store";
+import { sameSessionId } from "../herdr/model";
 import { serializeLatest } from "../util/coalesce";
 import { buildListView, loadingText, renderSession, type ListView } from "./views";
+import { renderHerdrSession } from "./herdr-views";
 import { showListPage, showLoadingPage, showSessionPage } from "./render";
 import type { EvenAppBridge } from "@evenrealities/even_hub_sdk";
 
@@ -16,6 +18,8 @@ export interface PageRendererDeps {
   showListPage(rows: string[]): Promise<void>;
   showSessionPage(): Promise<void>;
   renderSession(s: AppState): Promise<void>;
+  /** The read-only Herdr terminal screen — its own page kind (Phase 2). */
+  renderHerdrSession(s: AppState): Promise<void>;
   /** True while the wearer is mid-scroll on the list (rebuilds are held back). */
   isBrowsing(): boolean;
 }
@@ -26,6 +30,7 @@ export function pageRendererDeps(bridge: EvenAppBridge, isBrowsing: () => boolea
     showListPage: (rows) => showListPage(bridge, rows),
     showSessionPage: () => showSessionPage(bridge),
     renderSession: (s) => renderSession(bridge, s),
+    renderHerdrSession: (s) => renderHerdrSession(bridge, s),
     isBrowsing,
   };
 }
@@ -57,11 +62,21 @@ export function createPageRenderer(deps: PageRendererDeps) {
         next.rows.length === shown.rows.length
         && next.rows.every((r, i) => r === shown.rows[i])
         && next.ids.length === shown.ids.length
-        && next.ids.every((id, i) => id === shown.ids[i]);
+        && next.ids.every((id, i) => sameSessionId(id, shown.ids[i]));
       if (builtPage === "list" && (unchanged || deps.isBrowsing())) return;
       shown = next;
       await deps.showListPage(next.rows);
       builtPage = "list";
+      return;
+    }
+    // The Herdr detail screen shares the 4-container chat layout with the
+    // Hermes session page, but renders through its OWN read-only projection.
+    if (s.screen === "herdr-session") {
+      if (builtPage !== "session") {
+        await deps.showSessionPage();
+        builtPage = "session";
+      }
+      await deps.renderHerdrSession(s);
       return;
     }
     if (builtPage !== "session") {

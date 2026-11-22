@@ -1,7 +1,10 @@
 import { waitForEvenAppBridge, OsEventTypeList } from "@evenrealities/even_hub_sdk";
 import "./style.css";
-import { loadBridgeDefaults } from "./config";
+import { loadBridgeDefaults, loadHerdrDefaults, resolveHerdrProfile } from "./config";
 import { BridgeClient } from "./net/ws-client";
+import { HERDR_READ_LINES, HerdrClient } from "./net/herdr-ws";
+import { herdrTerminalsFromListReply } from "./herdr/model";
+import { applyHerdrTerminals, setHerdrConn, setHerdrRead } from "./state/herdr";
 import { initialState, applyDisconnected, markDeliveryUncertain, type AppState } from "./state/store";
 import { createHistoryWatch } from "./state/history-watch";
 import { applyServerMessage, type ConnectionFlags } from "./state/connection";
@@ -150,6 +153,9 @@ async function boot(): Promise<void> {
       activeSession: state.sessions.active,
       sessionsLoaded: state.sessionsLoaded,
       caps: state.caps,
+      // Herdr status dot on the config screen: null when the leg is off
+      // (unconfigured) so Phase-2-off stays indistinguishable from before.
+      herdrStatus: resolveHerdrProfile(profile, herdrDefaults) ? state.herdr.conn : null,
     }, {
       onSaveConnect: (url, token) => {
         fireAndForget(saveAndConnect(url, token));
@@ -309,12 +315,63 @@ async function boot(): Promise<void> {
     },
   });
 
+  // ── Herdr relay leg (Phase 2) ────────────────────────────────────────────
+  // A SEPARATE read-only socket to herdr-relay. Feature-off (no endpoint
+  // resolved) opens nothing, starts no timers, and changes no behavior. Every
+  // failure is silent: rows drop, the list degrades to Hermes-only, and the
+  // only visibility is the status dot on the phone config screen.
+  const herdrDefaults = loadHerdrDefaults();
+  const herdr = new HerdrClient({
+    onStatus: (st) => {
+      const prev = state;
+      state = setHerdrConn(state, st);
+      if (state !== prev) {
+        scheduleRender(state);
+        renderPhone();
+      }
+    },
+    onTerminals: (raw) => {
+      const prev = state;
+      state = applyHerdrTerminals(state, herdrTerminalsFromListReply(raw));
+      if (state !== prev) scheduleRender(state);
+    },
+    onRead: (r) => {
+      const prev = state;
+      state = setHerdrRead(state, r.address, r.text);
+      if (state !== prev) scheduleRender(state);
+    },
+  });
+
+  const startHerdrLeg = (): void => {
+    const endpoint = resolveHerdrProfile(profile, herdrDefaults);
+    herdr.connect(endpoint);
+    if (endpoint) startHerdrReadPoll();
+    else stopHerdrReadPoll();
+  };
+
+  /** Auto-refresh of the open detail screen: herdr.read every 5s while the
+   *  read-only screen is on (feature ON only — off opens no timer at all). */
+  const HERDR_READ_POLL_MS = 5_000;
+  let herdrReadTimer: ReturnType<typeof setInterval> | undefined;
+  const startHerdrReadPoll = (): void => {
+    if (herdrReadTimer) return;
+    herdrReadTimer = setInterval(() => {
+      const detail = state.herdr.detail;
+      if (state.screen === "herdr-session" && detail) herdr.read(detail.address);
+    }, HERDR_READ_POLL_MS);
+  };
+  const stopHerdrReadPoll = (): void => {
+    clearInterval(herdrReadTimer);
+    herdrReadTimer = undefined;
+  };
+
   async function saveAndConnect(url: string, token: string): Promise<void> {
     const candidate: ConnectionProfile = {
       url,
       token,
       device: profile?.device,
       activeSession: profile?.activeSession,
+      herdr: profile?.herdr,
       updatedAt: Date.now(),
     };
     const validation = validateConnectionProfile(candidate);
@@ -333,6 +390,7 @@ async function boot(): Promise<void> {
     // A user-initiated connect is a fresh launch for the boot resume (F1).
     flags = { helloOk: false, bootResumeDone: false };
     client.connect(profile);
+    startHerdrLeg();
     renderPhone();
   }
 
@@ -340,6 +398,7 @@ async function boot(): Promise<void> {
   if (profileIsReady(profile)) {
     client.connect(profile);
   }
+  startHerdrLeg();
 
   const capture = createCapture(bridge, client, (err) => {
     console.error("[glasses] capture error", err);
@@ -386,9 +445,15 @@ async function boot(): Promise<void> {
     if (state.screen === "list" && (g === "scrollUp" || g === "scrollDown")) lastListScrollAt = Date.now();
 
     const prevLoadingFor = state.history.loadingFor;
+    const prevScreen = state.screen;
     // Resolve the tap against what is ON SCREEN — the list re-sorts underneath us.
     const r = dispatch(state, g, index, pages.snapshot());
     state = r.state;
+    // Entering the read-only herdr screen fetches its first read immediately;
+    // the 5s poll covers the refresh while it stays open.
+    if (state.screen === "herdr-session" && prevScreen !== "herdr-session" && state.herdr.detail) {
+      herdr.read(state.herdr.detail.address, HERDR_READ_LINES);
+    }
     if (state.notice) armNoticeTimer();
     for (const e of r.effects) runEffect(e);
     // Page transitions (list ↔ session) ride inside the serialized renderer.
@@ -405,6 +470,8 @@ async function boot(): Promise<void> {
     off();
     capture.stop().catch(() => {});
     stopSessionsRetry();
+    stopHerdrReadPoll();
+    herdr.disconnect();
     client.disconnect();
   }
 

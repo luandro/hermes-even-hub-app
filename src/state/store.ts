@@ -1,4 +1,5 @@
 import type { HistoryItem, PromptOption, ServerMsg, SessionItem } from "../protocol";
+import type { HerdrState } from "../herdr/model";
 import { isKnownForeignSession, truncateTitle } from "../ui/session-list";
 
 /**
@@ -27,7 +28,12 @@ export const HINTS = {
   noticeSessionOpenFailed: "couldn't open that session",
 } as const;
 
-export type Screen = "list" | "session";
+/**
+ * "herdr-session" is the read-only Herdr terminal screen (Phase 2) — a
+ * distinct screen kind from the Hermes "session" conversation screen, so no
+ * conversation path can ever render terminal output or vice versa.
+ */
+export type Screen = "list" | "session" | "herdr-session";
 export type Phase = "idle" | "recording" | "transcribing" | "review";
 export type Turn = "idle" | "thinking" | "working";
 
@@ -98,6 +104,9 @@ export interface AppState {
    *  conversation_id → the session row id that RECEIVED the frame. Only cids
    *  in this map group their list rows; everything else renders as before. */
   mirrorCids: Record<string, string>;
+  /** Herdr relay leg (Phase 2). Empty + "off" when unconfigured ⇒ the app
+   *  behaves exactly as pre-Phase-2: no rows, no socket, no screen. */
+  herdr: HerdrState;
 }
 
 export function initialState(): AppState {
@@ -120,6 +129,7 @@ export function initialState(): AppState {
     expectingNewSession: false,
     unconfirmedOwnId: null,
     mirrorCids: {},
+    herdr: { rows: [], conn: "off", detail: null },
   };
 }
 

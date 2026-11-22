@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { getTextWidth } from "@evenrealities/pretext";
 import { listRows, buildListView, loadingText, renderList, renderSession } from "../src/ui/views";
 import { initialState, type AppState, type Prompt } from "../src/state/store";
+import type { PromptOption } from "../src/protocol";
 import { THREAD_BODY_INNER_WIDTH, THREAD_VIEWPORT_LINES } from "../src/ui/stream";
 
 describe("buildListView", () => {
@@ -21,7 +22,12 @@ describe("buildListView", () => {
     };
     const view = buildListView(s, 400);
     // V2: the resumable foreign row is listed (tagged); read-only stays hidden.
-    expect(view.ids).toEqual([null, "tg-1", "own-2", "own-1"]);
+    expect(view.ids).toEqual([
+      null,
+      { kind: "hermes", id: "tg-1" },
+      { kind: "hermes", id: "own-2" },
+      { kind: "hermes", id: "own-1" },
+    ]);
     expect(view.rows).toHaveLength(4);
     expect(view.rows[1]).toContain("[TG] Telegram chat");
     expect(view.rows[2]).toContain("second own");
@@ -43,7 +49,13 @@ describe("buildListView", () => {
     expect(view.rows).toHaveLength(16);
     expect(view.rows[0]).toBe("＋ New session");
     expect(view.rows[1]).toContain("[TG] tg 11");
-    expect(view.ids).toEqual([null, ...Array.from({ length: 12 }, (_, i) => `tg-${11 - i}`), "own-a", "own-b", "own-c"]);
+    expect(view.ids).toEqual([
+      null,
+      ...Array.from({ length: 12 }, (_, i) => ({ kind: "hermes" as const, id: `tg-${11 - i}` })),
+      { kind: "hermes", id: "own-a" },
+      { kind: "hermes", id: "own-b" },
+      { kind: "hermes", id: "own-c" },
+    ]);
   });
 });
 
@@ -200,7 +212,7 @@ describe("renderSession", () => {
     const s: AppState = {
       ...initialState(), screen: "session", phase: "idle", conn: "connected",
       sessions: { items: [{ id: "a", title: "A", updated: 0 }], active: "a" },
-      history: { loadingFor: "a", failedFor: null },
+      history: { loadingFor: "a", failedFor: null, refresh: false },
     };
     await renderSession(bridge, s);
     expect(calls[2]).toBe("loading session...");
@@ -212,7 +224,7 @@ describe("renderSession", () => {
     const s: AppState = {
       ...initialState(), screen: "session", phase: "idle", conn: "connected",
       sessions: { items: [{ id: "a", title: "A", updated: 0 }], active: "a" },
-      history: { loadingFor: null, failedFor: "a" },
+      history: { loadingFor: null, failedFor: "a", refresh: false },
     };
     await renderSession(bridge, s);
     expect(calls[2]).toBe("tap to speak");
@@ -224,7 +236,7 @@ describe("renderSession", () => {
     const s: AppState = {
       ...initialState(), screen: "session", phase: "idle", conn: "connected",
       sessions: { items: [{ id: "tg-1", title: "🔒 TG", updated: 0, read_only: true }], active: "tg-1" },
-      history: { loadingFor: null, failedFor: null },
+      history: { loadingFor: null, failedFor: null, refresh: false },
       readonlyNoHistory: true,
       stream: [],
     };
@@ -329,7 +341,7 @@ describe("renderSession: prompt panel (A6/A11)", () => {
       const options = Array.from({ length: n }, (_, i) => ({
         id: `o${i}`,
         label: `Option ${i}`,
-        style: i === 0 ? "primary" as const : "",
+        style: (i === 0 ? "primary" : "") as PromptOption["style"],
         ...(i === 1 ? { default: true } : {}),
       }));
       await renderSession(bridge, prompted(prompt({ options, command: "python3 -m http.server 8080 --directory /var/www --bind 127.0.0.1" })));

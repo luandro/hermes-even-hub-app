@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getAdvW, getTextWidth } from "@evenrealities/pretext";
 import { HINTS } from "../src/state/store";
 import { NEW_SESSION_ROW } from "../src/ui/session-list";
+import { HERDR_MARKER, herdrSectionHeader } from "../src/herdr/model";
 
 // Missing glyphs are dropped SILENTLY by the firmware font: raw advance width 0,
 // rendered as a 4px placeholder box (getAdvW maps raw-0/cp>=32 to 4). So
@@ -9,8 +10,16 @@ import { NEW_SESSION_ROW } from "../src/ui/session-list";
 // when built from missing glyphs. The honest check is the RAW advance width,
 // asserted per character below.
 describe("firmware glyph coverage", () => {
-  // PT-BR readiness: ã ç é ê õ í all need real glyphs.
-  const strings = [...Object.values(HINTS), NEW_SESSION_ROW, "ãçéêõí"];
+  // PT-BR readiness: ã ç é ê õ í all need real glyphs. Herdr rows add the ◇
+  // marker, the section header and the read-only status line.
+  const strings = [
+    ...Object.values(HINTS),
+    NEW_SESSION_ROW,
+    "ãçéêõí",
+    HERDR_MARKER,
+    herdrSectionHeader(3),
+    "read-only · exit 0",
+  ];
 
   it("every character in HINTS and the new-session row has a real glyph (raw advW > 0)", () => {
     for (const text of strings) {

@@ -79,7 +79,7 @@ describe("dispatch: list", () => {
       { id: "b", title: "B" },
     ]);
     const shown = buildListView(s);
-    expect(shown.ids).toEqual([null, "tg", "b"]);
+    expect(shown.ids).toEqual([null, { kind: "hermes", id: "tg" }, { kind: "hermes", id: "b" }]);
   });
   it("V2: tapping a resumable foreign row enters it and sends sessions.switch (handoff)", () => {
     const s = listWith([
@@ -98,7 +98,7 @@ describe("dispatch: list", () => {
       { id: "ro", title: "Telegram session", read_only: true },
       { id: "b", title: "B" },
     ]);
-    const staleRoSnapshot = { ids: [null, "ro"] };
+    const staleRoSnapshot = { ids: [null, { kind: "hermes" as const, id: "ro" }] };
     const r = dispatch(s, "click", 1, staleRoSnapshot);
     expect(r.state.screen).toBe("session");
     expect(r.state.sessions.active).toBe("ro");
@@ -117,7 +117,7 @@ describe("dispatch: list", () => {
       { id: "ro", title: "Telegram session", read_only: true },
       { id: "owned", title: "Owned session", read_only: false },
     ]);
-    const staleRoSnapshot = { ids: [null, "ro"] };
+    const staleRoSnapshot = { ids: [null, { kind: "hermes" as const, id: "ro" }] };
     const r1 = dispatch(listState, "click", 1, staleRoSnapshot);
     expect(r1.state.screen).toBe("session");
     expect(r1.state.sessions.active).toBe("ro");
@@ -560,7 +560,7 @@ describe("a tap resolves against the rows on screen", () => {
       { id: "b", title: "B", updated: 100 },
     ]);
     const shown = buildListView(before);
-    expect(shown.ids).toEqual([null, "a", "b"]);
+    expect(shown.ids).toEqual([null, { kind: "hermes", id: "a" }, { kind: "hermes", id: "b" }]);
 
     // A `sessions` frame lands and B is now the most recent.
     const after = listWith([

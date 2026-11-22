@@ -1,6 +1,8 @@
 import type { EvenAppBridge } from "@evenrealities/even_hub_sdk";
 import type { AppState, Prompt, StreamItem } from "../state/store";
 import { HINTS, barText, connDot, isHistoryLoading } from "../state/store";
+import type { AnySessionId } from "../herdr/model";
+import { formatHerdrRow, herdrId, herdrSectionHeader, orderedHerdrRows } from "../herdr/model";
 import { IDS, setText, showListPage, showLoadingPage } from "./render";
 import {
   LOADING_SESSIONS_ROW,
@@ -30,11 +32,14 @@ export function truncateRow(title: string): string {
  * sits at that index NOW, which after any reorder is not the row the wearer
  * touched.
  *
- * `ids[i]` is the session for row `i`, or null for the ＋New row.
+ * `ids[i]` is the TAGGED id of row `i` — `{kind:"hermes", id}`, `{kind:"herdr",
+ * address}`, or null for the ＋New row and the `herdr · N` section header. The
+ * tag is the Phase 2 type-level gate: a bare string can no longer flow from a
+ * list tap into a Hermes-only operation.
  */
 export interface ListView {
   rows: string[];
-  ids: (string | null)[];
+  ids: (AnySessionId | null)[];
 }
 
 export function buildListView(s: AppState, nowSeconds?: number): ListView {
@@ -45,9 +50,19 @@ export function buildListView(s: AppState, nowSeconds?: number): ListView {
   // drawn from — foreign/read-only sessions never enter the mapping. Mirror-
   // learned cids (V3.1 W3) merge live-linked legs into that same single array.
   const listable = listableSessions(s.sessions.items, s.mirrorCids);
+  // Herdr rows join UNDER a section header, newest-first (same ordering rule
+  // as the Hermes block). No rows (feature off or relay down) ⇒ no header: the
+  // list renders exactly as pre-Phase-2.
+  const herdrRows = orderedHerdrRows(s.herdr.rows);
+  const herdrBlock = herdrRows.length
+    ? [herdrSectionHeader(herdrRows.length), ...herdrRows.map((r) => formatHerdrRow(r, now))]
+    : [];
+  const herdrIds: (AnySessionId | null)[] = herdrRows.length
+    ? [null, ...herdrRows.map((r) => herdrId(r.address))]
+    : [];
   return {
-    rows: [NEW_SESSION_ROW, ...listable.map((item) => formatSessionRow(item, s.sessions.active, now))],
-    ids: [null, ...listable.map((item) => item.id)],
+    rows: [NEW_SESSION_ROW, ...listable.map((item) => formatSessionRow(item, s.sessions.active, now)), ...herdrBlock],
+    ids: [null, ...listable.map((item): AnySessionId => ({ kind: "hermes", id: item.id })), ...herdrIds],
   };
 }
 

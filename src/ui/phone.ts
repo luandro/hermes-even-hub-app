@@ -22,6 +22,12 @@ interface PhoneSetupState {
   activeSession?: string | null;
   sessionsLoaded?: boolean;
   caps?: PhoneCaps | null;
+  /**
+   * Phase 2: Herdr relay status on the config screen. null = feature off
+   * (nothing rendered — pre-Phase-2 UI); otherwise one of the Herdr
+   * connection statuses, shown as a tiny dot + label next to the bridge dot.
+   */
+  herdrStatus?: string | null;
 }
 
 export interface PhoneSettings {
@@ -80,7 +86,14 @@ export function renderPhoneSetup(
   disconnect.disabled = state.status === "not configured" || state.status === "disconnected";
   disconnect.addEventListener("click", actions.onDisconnect);
   actionsRow.append(save, disconnect);
-  header.append(el("div", "setup-title", "", [title, intro]), status);
+  const statusColumn = el("div", "setup-status-column", "", [status]);
+  // Tiny herdr relay state dot — only when the leg is configured at all.
+  if (state.herdrStatus) {
+    statusColumn.append(
+      el("p", `setup-status setup-status-herdr ${herdrStatusClass(state.herdrStatus)}`, `◇ herdr ${state.herdrStatus}`),
+    );
+  }
+  header.append(el("div", "setup-title", "", [title, intro]), statusColumn);
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -435,4 +448,10 @@ function statusClass(status: string): string {
   if (status.startsWith("error:")) return "is-error";
   if (status === "not configured" || status === "disconnected") return "is-muted";
   return "is-pending";
+}
+
+/** Herdr relay status reuses the bridge status classes (same semantics). */
+function herdrStatusClass(status: string): string {
+  if (status === "rejected") return "is-error";
+  return statusClass(status);
 }

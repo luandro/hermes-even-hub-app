@@ -2,7 +2,7 @@
   "package_id": "com.luandro.g2hermes",
   "edition": "202601",
   "name": "Hermes G2",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "min_app_version": "2.0.0",
   "min_sdk_version": "0.0.10",
   "entrypoint": "index.html",
@@ -12,7 +12,9 @@
       "desc": "Connect to local Hermes bridge",
       "whitelist": [
         "wss://g2-bridge.taile61e1.ts.net",
-        "wss://g2-bridge.taile61e1.ts.net:443"
+        "wss://g2-bridge.taile61e1.ts.net:443",
+        "wss://luandro-thinkpad.taile61e1.ts.net",
+        "wss://luandro-thinkpad.taile61e1.ts.net:443"
       ]
     },
     {

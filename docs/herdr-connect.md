@@ -18,12 +18,16 @@ Hermes bridge socket is never touched by anything on this page.
 
 ## 2. Install herdr-core
 
-```
+Install command, quoted verbatim from the official README
+(https://github.com/herdrdev/herdr-core#install — check there first if it ever
+changes; piping any install script into `sh` is a supply-chain decision):
+
+```sh
 curl -fsSL https://releases.herdr.dev/core/install.sh | sh
 ```
 
-(This is the install line from the herdr-core README — copy it from there, not
-from memory, if it ever changes.)
+Verified 2026-11-22 against herdrdev/herdr-core master README; produced a
+working `herdr-core` 0.1.21 on this host.
 
 Check: `herdr-core serve` is running and the socket exists at
 `/run/user/$(id -u)/herdr-core/default.sock`.
@@ -32,15 +36,16 @@ Check: `herdr-core serve` is running and the socket exists at
 
 ```
 cd ~/work/g2-hermes/herdr-relay
+uv venv && uv pip install -e .                      # first time only
 export HERDR_RELAY_TOKEN=$(openssl rand -hex 24)   # store it in the password manager
 HERDR_RELAY_PORT=8700 .venv/bin/python -m herdr_relay
 ```
 
-- It refuses to start without a token (`herdr_relay/__main__.py`).
+- It refuses to start without a token (`src/herdr_relay/__main__.py`).
 - `HERDR_RELAY_HOST` defaults to `127.0.0.1`; keep that — the relay must not
   listen beyond localhost.
 - Set `HERDR_SOCK` only for a non-default herdr-core socket
-  (`herdr_relay/herdr_client.py`).
+  (`src/herdr_relay/herdr_client.py`).
 
 ## 4. Expose it on the already-whitelisted host
 
@@ -64,7 +69,10 @@ Hermes setup → **Herdr relay (optional)** panel:
 
 The status dot next to the bridge dot shows `◇ herdr connected`, and Herdr
 terminals appear in the unified session list. Clearing both fields and saving
-turns the leg off.
+turns the leg off — on production builds (no `VITE_HERDR_URL`/`VITE_HERDR_TOKEN`
+at build time). On a dev build with those env vars set, the env value re-fills
+the empty field and the leg stays on; that is a build-time-default quirk, not a
+bug to fix here.
 
 ## 6. Troubleshooting by dot
 

@@ -1,4 +1,5 @@
-import type { BridgeDefaults } from "../config";
+import type { BridgeDefaults, HerdrDefaults } from "../config";
+import { herdrSectionError } from "../config";
 import type { ConnectionProfile } from "../storage/persist";
 import type { SessionItem } from "../protocol";
 import { compactAge, orderedSessions } from "./session-list";
@@ -28,6 +29,8 @@ interface PhoneSetupState {
    * connection statuses, shown as a tiny dot + label next to the bridge dot.
    */
   herdrStatus?: string | null;
+  /** Env-side herdr relay defaults (VITE_HERDR_*), for the relay form's placeholders-in-value. */
+  herdrDefaults?: HerdrDefaults;
 }
 
 export interface PhoneSettings {
@@ -46,6 +49,8 @@ export interface PhoneSetupActions {
   onSettingsSet: (settings: PhoneSettings) => void;
   /** Persist the hello device id (takes effect on reconnect). */
   onSaveDevice: (device: string) => void;
+  /** Persist the herdr relay section (own button — never reconnects the bridge). */
+  onSaveHerdr: (url: string, token: string) => void;
 }
 
 /** Foreign rows (telegram by platform, or any row the bridge flags foreign). */
@@ -106,12 +111,60 @@ export function renderPhoneSetup(
     updated,
     errorList(state.errors),
     form,
+    herdrPanel(state, actions),
     sessionsPanel(state, actions),
     settingsPanel(state, actions),
     helpBlock(),
   );
   shell.append(panel);
   root.replaceChildren(shell);
+}
+
+// ── Herdr relay panel ─────────────────────────────────────────────────────────
+
+/**
+ * "Herdr relay (optional)": its OWN form and Save button, directly below the
+ * bridge form. Saving the relay must never restart the Hermes session, so it
+ * can't ride "Save and connect". The error is computed from the SAVED profile
+ * section at render time — it survives re-renders and flags bad values stored
+ * by older versions; it never blocks the bridge save.
+ */
+function herdrPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLElement {
+  const section = el("section", "phone-panel herdr-panel");
+  const form = el("form", "setup-form");
+  const url = input(
+    "url",
+    "herdr_url",
+    state.profile?.herdr?.url || state.herdrDefaults?.url || "",
+    "wss://g2-bridge.taile61e1.ts.net/herdr",
+  );
+  const token = input(
+    "password",
+    "herdr_token",
+    state.profile?.herdr?.token || state.herdrDefaults?.token || "",
+    "HERDR_RELAY_TOKEN",
+  );
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    actions.onSaveHerdr(url.value, token.value);
+  });
+
+  const error = herdrSectionError(state.profile?.herdr);
+  const save = button("submit", "Save relay");
+  save.disabled = !state.profile;
+  const notes = [el("p", "setting-note", "Leave both empty to keep Herdr off.")];
+  if (!state.profile) notes.push(el("p", "setting-note", "Save the bridge connection first."));
+
+  form.append(
+    label("Relay URL", url),
+    label("Relay token", token),
+    errorList(error ? [error] : []),
+    ...notes,
+    save,
+  );
+  section.append(el("h2", "panel-title", "Herdr relay (optional)"), form);
+  return section;
 }
 
 // ── Sessions panel ───────────────────────────────────────────────────────────

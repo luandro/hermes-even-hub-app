@@ -4,7 +4,7 @@ import { loadBridgeDefaults, loadHerdrDefaults, resolveHerdrProfile } from "./co
 import { BridgeClient } from "./net/ws-client";
 import { HERDR_READ_LINES, HerdrClient } from "./net/herdr-ws";
 import { herdrTerminalsFromListReply } from "./herdr/model";
-import { applyHerdrTerminals, setHerdrConn, setHerdrRead } from "./state/herdr";
+import { applyHerdrTerminals, closeHerdrSession, setHerdrConn, setHerdrRead } from "./state/herdr";
 import { initialState, applyDisconnected, markDeliveryUncertain, type AppState } from "./state/store";
 import { createHistoryWatch } from "./state/history-watch";
 import { applyServerMessage, type ConnectionFlags } from "./state/connection";
@@ -156,6 +156,7 @@ async function boot(): Promise<void> {
       // Herdr status dot on the config screen: null when the leg is off
       // (unconfigured) so Phase-2-off stays indistinguishable from before.
       herdrStatus: resolveHerdrProfile(profile, herdrDefaults) ? state.herdr.conn : null,
+      herdrDefaults,
     }, {
       onSaveConnect: (url, token) => {
         fireAndForget(saveAndConnect(url, token));
@@ -183,6 +184,9 @@ async function boot(): Promise<void> {
       },
       onSaveDevice: (device) => {
         fireAndForget(saveDevice(device));
+      },
+      onSaveHerdr: (url, token) => {
+        fireAndForget(saveHerdr(url, token));
       },
     });
   };
@@ -391,6 +395,23 @@ async function boot(): Promise<void> {
     flags = { helloOk: false, bootResumeDone: false };
     client.connect(profile);
     startHerdrLeg();
+    renderPhone();
+  }
+
+  /**
+   * Persist the herdr relay section from its OWN form. Never touches `client`:
+   * a relay-only change must not restart the Hermes session or the boot-resume
+   * flags. An empty pair of fields normalizes the section away → connect(null)
+   * reports "off" and drops the rows.
+   */
+  async function saveHerdr(url: string, token: string): Promise<void> {
+    if (!profile) return;
+    profile = await saveConnectionProfile(bridge, { ...profile, herdr: { url, token }, updatedAt: Date.now() });
+    startHerdrLeg();                       // connect(endpoint) or connect(null) → "off"
+    if (!resolveHerdrProfile(profile, herdrDefaults) && state.screen === "herdr-session") {
+      state = closeHerdrSession(state);    // explicit OFF: don't leave a frozen terminal open
+      scheduleRender(state);
+    }
     renderPhone();
   }
 

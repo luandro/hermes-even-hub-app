@@ -119,6 +119,7 @@ describe("phone setup help and placeholder", () => {
         onSwitchSession: () => {},
         onSettingsSet: () => {},
         onSaveDevice: () => {},
+        onSaveHerdr: () => {},
       },
     );
 
@@ -165,6 +166,7 @@ describe("phone sessions panel", () => {
       onSwitchSession: () => {},
       onSettingsSet: () => {},
       onSaveDevice: () => {},
+      onSaveHerdr: () => {},
     };
     renderPhoneSetup(
       root as unknown as HTMLElement,
@@ -339,6 +341,7 @@ describe("phone settings panel", () => {
       onSwitchSession: () => {},
       onSettingsSet: () => {},
       onSaveDevice: () => {},
+      onSaveHerdr: () => {},
     };
     renderPhoneSetup(
       root as unknown as HTMLElement,
@@ -409,5 +412,110 @@ describe("phone settings panel", () => {
     device.value = "g2-lab";
     findButtonByText(root, "Save device")!.fire("click");
     expect(spy).toHaveBeenCalledWith("g2-lab");
+  });
+});
+
+describe("phone herdr panel", () => {
+  const origDoc = (globalThis as any).document;
+
+  beforeEach(() => {
+    (globalThis as any).document = {
+      createElement: (tag: string) => new FakeElement(tag),
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as any).document = origDoc;
+    vi.unstubAllGlobals();
+  });
+
+  const herdrProfile = {
+    url: "wss://g2-bridge.taile61e1.ts.net",
+    token: "bridge-tok",
+    herdr: { url: "wss://g2-bridge.taile61e1.ts.net/herdr", token: "relay-tok" },
+    updatedAt: 1,
+  };
+
+  function render(overrides: Record<string, unknown> = {}) {
+    const root = new FakeElement("div");
+    const actions = {
+      onSaveConnect: () => {},
+      onDisconnect: () => {},
+      onRefreshSessions: () => {},
+      onSwitchSession: () => {},
+      onSettingsSet: () => {},
+      onSaveDevice: () => {},
+      onSaveHerdr: () => {},
+    };
+    renderPhoneSetup(
+      root as unknown as HTMLElement,
+      {
+        ...baseState,
+        profile: herdrProfile,
+        ...overrides,
+      },
+      actions,
+    );
+    return { root, actions };
+  }
+
+  it("renders herdr relay fields after the bridge form, prefilled from the profile", () => {
+    const { root } = render();
+    const forms = findAll(root, "form");
+    expect(forms.length).toBeGreaterThanOrEqual(2);
+    const herdrForm = forms[1];
+    const url = findAll(herdrForm, "input").find((i) => i.name === "herdr_url")!;
+    const token = findAll(herdrForm, "input").find((i) => i.name === "herdr_token")!;
+    expect(url.type).toBe("url");
+    expect(url.value).toBe("wss://g2-bridge.taile61e1.ts.net/herdr");
+    expect(token.type).toBe("password");
+    expect(token.value).toBe("relay-tok");
+  });
+
+  it("Save relay calls onSaveHerdr with both fields and never onSaveConnect", () => {
+    const { root, actions } = render();
+    const connectSpy = vi.spyOn(actions, "onSaveConnect");
+    const herdrSpy = vi.spyOn(actions, "onSaveHerdr");
+    const herdrForm = findAll(root, "form")[1];
+    const url = findAll(herdrForm, "input").find((i) => i.name === "herdr_url")!;
+    const token = findAll(herdrForm, "input").find((i) => i.name === "herdr_token")!;
+    url.value = "wss://g2-bridge.taile61e1.ts.net/herdr";
+    token.value = "new-tok";
+    herdrForm.fire("submit");
+    expect(herdrSpy).toHaveBeenCalledWith("wss://g2-bridge.taile61e1.ts.net/herdr", "new-tok");
+    expect(connectSpy).not.toHaveBeenCalled();
+  });
+
+  it("shows the inline error for a saved https URL and a partial section, none when off", () => {
+    const bad = render({
+      profile: { ...herdrProfile, herdr: { url: "https://g2-bridge.taile61e1.ts.net/herdr", token: "relay-tok" } },
+    });
+    expect(collectTextAndPlaceholders(bad.root).texts.join(" ")).toContain(
+      "Relay URL must start with wss:// or ws://. Herdr stays off until fixed.",
+    );
+
+    const partial = render({
+      profile: { ...herdrProfile, herdr: { url: "wss://g2-bridge.taile61e1.ts.net/herdr", token: "" } },
+    });
+    expect(collectTextAndPlaceholders(partial.root).texts.join(" ")).toContain(
+      "Relay token is required when a relay URL is set.",
+    );
+
+    const off = render({
+      profile: { url: "wss://g2-bridge.taile61e1.ts.net", token: "bridge-tok", updatedAt: 1 },
+    });
+    const texts = collectTextAndPlaceholders(off.root).texts.join(" ");
+    expect(texts).not.toContain("Relay URL must start with");
+    expect(texts).not.toContain("Relay token is required");
+    expect(texts).toContain("Leave both empty to keep Herdr off.");
+  });
+
+  it("disables Save relay until a bridge profile exists", () => {
+    expect(findButtonByText(render().root, "Save relay")!.disabled).toBe(false);
+    const noProfile = render({ profile: null });
+    expect(findButtonByText(noProfile.root, "Save relay")!.disabled).toBe(true);
+    expect(collectTextAndPlaceholders(noProfile.root).texts.join(" ")).toContain(
+      "Save the bridge connection first.",
+    );
   });
 });

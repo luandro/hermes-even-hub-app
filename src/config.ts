@@ -29,6 +29,9 @@ export function loadHerdrDefaults(): HerdrDefaults {
   };
 }
 
+/** Relay URL scheme gate — the ONE regex shared by the form check and the connect logic. */
+export const HERDR_URL_RE = /^wss?:\/\//i;
+
 /**
  * The effective Herdr endpoint: the profile's `herdr` section wins, env
  * defaults fill the gaps, and anything missing or not ws/wss is null = feature
@@ -42,6 +45,22 @@ export function resolveHerdrProfile(
   const url = profile?.herdr?.url || defaults.url;
   const token = profile?.herdr?.token || defaults.token;
   if (!url || !token) return null;
-  if (!/^wss?:\/\//i.test(url)) return null;
+  if (!HERDR_URL_RE.test(url)) return null;
   return { url, token };
+}
+
+/**
+ * Inline error for the phone "Herdr relay (optional)" form, computed from the
+ * SAVED profile section (input arrives trimmed via normalizeHerdrSection).
+ * Off (no section at all) is a valid state — null, never an error. This never
+ * gates the bridge save: the relay has its own Save button.
+ */
+export function herdrSectionError(h?: HerdrEndpoint): string | null {
+  const url = h?.url ?? "";
+  const token = h?.token ?? "";
+  if (!url && !token) return null;
+  if (url && !token) return "Relay token is required when a relay URL is set.";
+  if (!url && token) return "Relay URL is required (wss://…/herdr).";
+  if (!HERDR_URL_RE.test(url)) return "Relay URL must start with wss:// or ws://. Herdr stays off until fixed.";
+  return null;
 }

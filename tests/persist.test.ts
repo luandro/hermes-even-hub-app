@@ -7,7 +7,7 @@ import {
   validateConnectionProfile,
   type ConnectionProfile,
 } from "../src/storage/persist";
-import { loadBridgeDefaults } from "../src/config";
+import { loadBridgeDefaults, resolveHerdrProfile } from "../src/config";
 import type { EvenAppBridge } from "@evenrealities/even_hub_sdk";
 
 function makeBridge(stored: Record<string, string> = {}): EvenAppBridge {
@@ -163,5 +163,58 @@ describe("bridge defaults", () => {
   it("never bakes in a token default", () => {
     const defaults = loadBridgeDefaults();
     expect(defaults.token).toBe("");
+  });
+});
+
+describe("herdr profile section", () => {
+  it("saving an empty herdr section stores no herdr key and resolves the leg off", async () => {
+    const bridge = makeBridge();
+    const saved = await saveConnectionProfile(bridge, {
+      url: "wss://g2-bridge.taile61e1.ts.net",
+      token: "tok",
+      herdr: { url: "", token: "" },
+      updatedAt: 1,
+    });
+    expect(saved.herdr).toBeUndefined();
+    // What actually landed in storage has no herdr key at all.
+    const reloaded = await loadConnectionProfile(bridge);
+    expect(reloaded?.herdr).toBeUndefined();
+    expect(resolveHerdrProfile(saved, { url: "", token: "" })).toBeNull();
+  });
+
+  it("loads a pre-0.5.1 profile stored without a herdr section", async () => {
+    const bridge = makeBridge({
+      "hermes.connectionProfile.v1": JSON.stringify({
+        url: "wss://g2-bridge.taile61e1.ts.net",
+        token: "tok",
+        updatedAt: 2,
+      }),
+    });
+    const loaded = await loadConnectionProfile(bridge);
+    expect(loaded).toMatchObject({ url: "wss://g2-bridge.taile61e1.ts.net", token: "tok" });
+    expect(loaded?.herdr).toBeUndefined();
+    expect(isConfiguredProfile(loaded)).toBe(true);
+  });
+
+  it("a bridge save keeps an existing herdr section", async () => {
+    const bridge = makeBridge({
+      "hermes.connectionProfile.v1": JSON.stringify({
+        url: "wss://g2-bridge.taile61e1.ts.net",
+        token: "old",
+        herdr: { url: "wss://g2-bridge.taile61e1.ts.net/herdr", token: "relay-tok" },
+        updatedAt: 2,
+      }),
+    });
+    const loaded = await loadConnectionProfile(bridge);
+    // saveAndConnect rebuilds the candidate from the loaded profile's herdr.
+    const next = await saveConnectionProfile(bridge, {
+      url: "wss://g2-bridge.taile61e1.ts.net",
+      token: "new",
+      device: loaded?.device,
+      activeSession: loaded?.activeSession,
+      herdr: loaded?.herdr,
+      updatedAt: 3,
+    });
+    expect(next.herdr).toEqual({ url: "wss://g2-bridge.taile61e1.ts.net/herdr", token: "relay-tok" });
   });
 });

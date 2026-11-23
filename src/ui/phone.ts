@@ -58,6 +58,182 @@ function isTelegramSession(item: SessionItem): boolean {
   return item.platform === "telegram" || item.foreign === true;
 }
 
+// ── Render-stability mount (status flips must not tear down the page) ────────
+
+/**
+ * A status flip (bridge or herdr) used to rebuild the whole page, dropping
+ * drafts, focus and the token Show state several times a minute on a failing
+ * relay. Each root keeps a Mount: when the structural inputs are unchanged,
+ * only applyStatus() patches status text/classes/disabled states in place —
+ * no node is replaced.
+ */
+interface StatusRefs {
+  status: HTMLElement;
+  herdrDot: HTMLElement | null;
+  herdrInline: HTMLElement | null;
+  disconnect: HTMLButtonElement;
+  refresh: HTMLButtonElement;
+  asrSelect: HTMLSelectElement;
+  timeoutSelect: HTMLSelectElement;
+}
+
+/** Tracked form fields whose drafts, focus and Show state cross a rebuild. */
+type FieldMap = Map<string, { input: HTMLInputElement; base: string }>;
+
+/** Written by the panel builders during a full build, then frozen into a Mount. */
+interface BuildCtx {
+  refs: StatusRefs;
+  fields: FieldMap;
+  /** User state captured from the previous mount before this rebuild. */
+  carry: Carry | null;
+}
+
+interface Mount {
+  inputs: StructuralInputs;
+  refs: StatusRefs;
+  fields: FieldMap;
+}
+
+const mounts = new WeakMap<HTMLElement, Mount>();
+
+/**
+ * Inputs that decide the page's STRUCTURE, compared field by field with
+ * Object.is. Safe only as long as callers REASSIGN these values (state = {…},
+ * phoneErrors = […]) and never mutate them in place — if someone starts
+ * mutating, this comparison misses it and the UI goes stale. main.ts's
+ * renderPhone() is that contract. The status STRINGS are deliberately absent:
+ * they are exactly what the in-place patch handles.
+ */
+interface StructuralInputs {
+  profile: ConnectionProfile | null;
+  defaults: BridgeDefaults;
+  errors: string[];
+  sessions: SessionItem[] | undefined;
+  activeSession: string | null | undefined;
+  sessionsLoaded: boolean | undefined;
+  caps: PhoneCaps | null | undefined;
+  herdrDefaults: HerdrDefaults | undefined;
+  /** herdrStatus === null vs non-null — which dot/line set exists. */
+  herdrOn: boolean;
+}
+
+function structuralInputs(state: PhoneSetupState): StructuralInputs {
+  return {
+    profile: state.profile,
+    defaults: state.defaults,
+    errors: state.errors,
+    sessions: state.sessions,
+    activeSession: state.activeSession,
+    sessionsLoaded: state.sessionsLoaded,
+    caps: state.caps,
+    herdrDefaults: state.herdrDefaults,
+    herdrOn: state.herdrStatus != null,
+  };
+}
+
+function sameInputs(a: StructuralInputs, b: StructuralInputs): boolean {
+  return Object.is(a.profile, b.profile)
+    && Object.is(a.defaults, b.defaults)
+    && Object.is(a.errors, b.errors)
+    && Object.is(a.sessions, b.sessions)
+    && Object.is(a.activeSession, b.activeSession)
+    && Object.is(a.sessionsLoaded, b.sessionsLoaded)
+    && Object.is(a.caps, b.caps)
+    && Object.is(a.herdrDefaults, b.herdrDefaults)
+    && a.herdrOn === b.herdrOn;
+}
+
+/** User state captured from the outgoing mount right before a rebuild. */
+interface Carry {
+  drafts: Map<string, { value: string; base: string }>;
+  /** Password fields left in Show state (type === "text"). */
+  revealed: Set<string>;
+  focus: { name: string; start: number | null; end: number | null } | null;
+}
+
+/** Tracked password fields (the device input is type "text" natively). */
+const PASSWORD_FIELDS = new Set(["token", "herdr_token"]);
+
+function snapshot(prev: Mount): Carry {
+  const drafts = new Map<string, { value: string; base: string }>();
+  const revealed = new Set<string>();
+  let focus: Carry["focus"] = null;
+  const doc = (globalThis as { document?: Document }).document;
+  const active = doc?.activeElement ?? null;
+  for (const [name, { input, base }] of prev.fields) {
+    if (input.value !== base) drafts.set(name, { value: input.value, base });
+    if (input.type === "text" && PASSWORD_FIELDS.has(name)) revealed.add(name);
+    if (focus === null && input === active) {
+      let start: number | null = null;
+      let end: number | null = null;
+      try {
+        start = input.selectionStart;
+        end = input.selectionEnd;
+      } catch {
+        // Old WebView without selection APIs: carry focus only.
+      }
+      focus = { name, start, end };
+    }
+  }
+  return { drafts, revealed, focus };
+}
+
+/**
+ * Refill drafts after a rebuild. A changed SAVED value (a save, including
+ * trimming) wins and the draft is dropped for that field; drafts never reach
+ * the profile, so herdrSectionError stays on saved values.
+ */
+function applyDrafts(fields: FieldMap, carry: Carry): void {
+  for (const [name, { input, base }] of fields) {
+    const draft = carry.drafts.get(name);
+    if (draft && draft.base === base) input.value = draft.value;
+  }
+}
+
+function restoreFocus(fields: FieldMap, carry: Carry): void {
+  const target = carry.focus ? fields.get(carry.focus.name) : undefined;
+  if (!target || !carry.focus) return;
+  try {
+    target.input.focus({ preventScroll: true });
+    if (carry.focus.start != null && carry.focus.end != null) {
+      target.input.setSelectionRange(carry.focus.start, carry.focus.end);
+    }
+  } catch {
+    // Focus restoration must never break a render.
+  }
+}
+
+/** Shared ASR cap derivation for settingsPanel (build) and applyStatus (patch). */
+function asrInfo(caps: PhoneCaps | null | undefined): { models: string[]; pinned: boolean } {
+  const list = caps?.asr_models;
+  const models = Array.isArray(list) ? list.filter((m): m is string => typeof m === "string") : [];
+  return { models, pinned: caps?.asr_env_pinned === true };
+}
+
+/**
+ * The ONLY writer of status-derived text, classes and disabled states — the
+ * build and the in-place patch both go through it, so the paths cannot drift.
+ */
+function applyStatus(refs: StatusRefs, state: PhoneSetupState): void {
+  refs.status.className = `setup-status ${statusClass(state.status)}`;
+  refs.status.textContent = statusText(state.status);
+  refs.disconnect.disabled = state.status === "not configured" || state.status === "disconnected";
+  refs.refresh.disabled = state.status !== "connected" && state.status !== "reconnecting";
+  const connected = state.status === "connected";
+  const { models, pinned } = asrInfo(state.caps);
+  refs.asrSelect.disabled = !connected || models.length === 0 || pinned;
+  refs.timeoutSelect.disabled = !connected;
+  const hs = state.herdrStatus;
+  if (hs && refs.herdrDot) {
+    refs.herdrDot.className = `setup-status setup-status-herdr ${herdrStatusClass(hs)}`;
+    refs.herdrDot.textContent = `◇ herdr ${herdrStatusText(hs)}`;
+  }
+  if (hs && refs.herdrInline) {
+    refs.herdrInline.className = `setting-note setup-status-herdr ${herdrStatusClass(hs)}`;
+    refs.herdrInline.textContent = `Relay: ${herdrStatusText(hs)}`;
+  }
+}
+
 /** Foreign-row badge label: the owning surface's name, not a hardcoded one. */
 function foreignBadgeLabel(item: SessionItem): string {
   if (item.platform === "telegram") return "Telegram";
@@ -73,13 +249,50 @@ export function renderPhoneSetup(
   state: PhoneSetupState,
   actions: PhoneSetupActions,
 ): void {
+  const prev = mounts.get(root);
+  const inputs = structuralInputs(state);
+  if (prev && sameInputs(prev.inputs, inputs)) {
+    // Status-only flip: patch in place, replace nothing. The first build's
+    // action handlers stay live — main.ts passes fresh closures per call, but
+    // they read live `let` bindings (profile, client, state), so nothing
+    // captured at build time can go stale.
+    applyStatus(prev.refs, state);
+    return;
+  }
+  const carry = prev ? snapshot(prev) : null;
+  const ctx: BuildCtx = {
+    // Every non-herdr ref is assigned during the build below, before
+    // applyStatus first reads it.
+    refs: {
+      status: null as unknown as HTMLElement,
+      herdrDot: null,
+      herdrInline: null,
+      disconnect: null as unknown as HTMLButtonElement,
+      refresh: null as unknown as HTMLButtonElement,
+      asrSelect: null as unknown as HTMLSelectElement,
+      timeoutSelect: null as unknown as HTMLSelectElement,
+    },
+    fields: new Map(),
+    carry,
+  };
+
   const shell = el("main", "setup-shell");
   const panel = el("section", "setup-panel");
   const form = el("form", "setup-form");
-  const url = input("url", "url", state.profile?.url || state.defaults.url, "wss://g2-bridge.taile61e1.ts.net");
-  const token = passwordInput("token", state.profile?.token || state.defaults.token, "Shared bridge token");
+  const bridgeUrlBase = state.profile?.url || state.defaults.url;
+  const bridgeTokenBase = state.profile?.token || state.defaults.token;
+  const url = input("url", "url", bridgeUrlBase, "wss://g2-bridge.taile61e1.ts.net");
+  ctx.fields.set("url", { input: url, base: bridgeUrlBase });
+  const token = passwordInput(
+    "token",
+    bridgeTokenBase,
+    "Shared bridge token",
+    carry?.revealed.has("token") ?? false,
+  );
+  ctx.fields.set("token", { input: token.input, base: bridgeTokenBase });
   const header = el("header", "setup-header");
-  const status = el("p", `setup-status ${statusClass(state.status)}`, statusText(state.status));
+  const status = el("p", "setup-status"); // text/class owned by applyStatus
+  ctx.refs.status = status;
   const title = el("h1", "", "Hermes");
   const intro = el("p", "setup-copy", "G2 bridge connection");
   const updated = state.profile?.updatedAt
@@ -88,15 +301,15 @@ export function renderPhoneSetup(
   const actionsRow = el("div", "setup-actions");
   const save = button("submit", "Save and connect");
   const disconnect = button("button", "Disconnect");
-  disconnect.disabled = state.status === "not configured" || state.status === "disconnected";
+  ctx.refs.disconnect = disconnect;
   disconnect.addEventListener("click", actions.onDisconnect);
   actionsRow.append(save, disconnect);
   const statusColumn = el("div", "setup-status-column", "", [status]);
   // Tiny herdr relay state dot — only when the leg is configured at all.
   if (state.herdrStatus) {
-    statusColumn.append(
-      el("p", `setup-status setup-status-herdr ${herdrStatusClass(state.herdrStatus)}`, `◇ herdr ${herdrStatusText(state.herdrStatus)}`),
-    );
+    const herdrDot = el("p", "setup-status setup-status-herdr");
+    ctx.refs.herdrDot = herdrDot;
+    statusColumn.append(herdrDot);
   }
   header.append(el("div", "setup-title", "", [title, intro]), statusColumn);
 
@@ -111,13 +324,19 @@ export function renderPhoneSetup(
     updated,
     errorList(state.errors),
     form,
-    herdrPanel(state, actions),
-    sessionsPanel(state, actions),
-    settingsPanel(state, actions),
+    herdrPanel(state, actions, ctx),
+    sessionsPanel(state, actions, ctx),
+    settingsPanel(state, actions, ctx),
     helpBlock(),
   );
   shell.append(panel);
   root.replaceChildren(shell);
+  applyStatus(ctx.refs, state);
+  if (carry) {
+    applyDrafts(ctx.fields, carry);
+    restoreFocus(ctx.fields, carry);
+  }
+  mounts.set(root, { inputs, refs: ctx.refs, fields: ctx.fields });
 }
 
 // ── Herdr relay panel ─────────────────────────────────────────────────────────
@@ -129,20 +348,20 @@ export function renderPhoneSetup(
  * section at render time — it survives re-renders and flags bad values stored
  * by older versions; it never blocks the bridge save.
  */
-function herdrPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLElement {
+function herdrPanel(state: PhoneSetupState, actions: PhoneSetupActions, ctx: BuildCtx): HTMLElement {
   const section = el("section", "phone-panel herdr-panel");
   const form = el("form", "setup-form");
-  const url = input(
-    "url",
-    "herdr_url",
-    state.profile?.herdr?.url || state.herdrDefaults?.url || "",
-    "wss://g2-bridge.taile61e1.ts.net/herdr",
-  );
+  const urlBase = state.profile?.herdr?.url || state.herdrDefaults?.url || "";
+  const tokenBase = state.profile?.herdr?.token || state.herdrDefaults?.token || "";
+  const url = input("url", "herdr_url", urlBase, "wss://g2-bridge.taile61e1.ts.net/herdr");
+  ctx.fields.set("herdr_url", { input: url, base: urlBase });
   const token = passwordInput(
     "herdr_token",
-    state.profile?.herdr?.token || state.herdrDefaults?.token || "",
+    tokenBase,
     "HERDR_RELAY_TOKEN",
+    ctx.carry?.revealed.has("herdr_token") ?? false,
   );
+  ctx.fields.set("herdr_token", { input: token.input, base: tokenBase });
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -155,13 +374,18 @@ function herdrPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLEle
   const notes = [el("p", "setting-note", "Leave both empty to keep Herdr off.")];
   if (!state.profile) notes.push(el("p", "setting-note", "Save the bridge connection first."));
 
-  form.append(
-    label("Relay URL", url),
-    label("Relay token", token.row),
-    errorList(error ? [error] : []),
-    ...notes,
-    save,
-  );
+  form.append(label("Relay URL", url), label("Relay token", token.row));
+  // Inline relay status under the token row: with the keyboard up and the
+  // page scrolled to this form, the header dot at the top is off-screen — the
+  // saveHerdr confirmation must be visible next to Save relay. Its text/class
+  // is owned by applyStatus (patched in place); only when the leg is
+  // configured (herdrStatus != null).
+  if (state.herdrStatus != null) {
+    const inline = el("p", "setting-note setup-status-herdr");
+    ctx.refs.herdrInline = inline;
+    form.append(inline);
+  }
+  form.append(errorList(error ? [error] : []), ...notes, save);
   section.append(el("h2", "panel-title", "Herdr relay (optional)"), form);
   return section;
 }
@@ -181,11 +405,11 @@ function rowMatches(item: SessionItem, filter: SessionFilter): boolean {
   return filter === "telegram" ? isTelegramSession(item) : !isTelegramSession(item);
 }
 
-function sessionsPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLElement {
+function sessionsPanel(state: PhoneSetupState, actions: PhoneSetupActions, ctx: BuildCtx): HTMLElement {
   const section = el("section", "phone-panel sessions-panel");
   const header = el("div", "panel-header");
   const refresh = button("button", "Refresh");
-  refresh.disabled = state.status !== "connected" && state.status !== "reconnecting";
+  ctx.refs.refresh = refresh; // disabled owned by applyStatus
   refresh.addEventListener("click", () => actions.onRefreshSessions());
   header.append(el("h2", "panel-title", "Sessions"), refresh);
 
@@ -331,27 +555,25 @@ const TIMEOUT_OPTIONS = [
   { label: "30s", value: "30" },
 ];
 
-function settingsPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLElement {
+function settingsPanel(state: PhoneSetupState, actions: PhoneSetupActions, ctx: BuildCtx): HTMLElement {
   const section = el("section", "phone-panel settings-panel");
   const caps = state.caps ?? {};
-  const connected = state.status === "connected";
 
   const deviceRow = el("div", "setting-row");
-  const deviceInput = input("text", "device", state.profile?.device || "g2", "g2");
+  const deviceBase = state.profile?.device || "g2";
+  const deviceInput = input("text", "device", deviceBase, "g2");
+  ctx.fields.set("device", { input: deviceInput, base: deviceBase });
   const saveDevice = button("button", "Save device");
   saveDevice.addEventListener("click", () => actions.onSaveDevice(deviceInput.value));
   deviceRow.append(label("Device ID", deviceInput), saveDevice);
 
-  const asrModels = Array.isArray(caps.asr_models)
-    ? caps.asr_models.filter((m): m is string => typeof m === "string")
-    : [];
-  const asrPinned = caps.asr_env_pinned === true;
+  const { models: asrModels, pinned: asrPinned } = asrInfo(caps);
   const asrSelect = select(
     "asr_model",
     asrModels.map((m) => ({ label: m, value: m })),
     String(caps.asr_active ?? ""),
   );
-  asrSelect.disabled = !connected || asrModels.length === 0 || asrPinned;
+  ctx.refs.asrSelect = asrSelect; // disabled owned by applyStatus
   asrSelect.addEventListener("change", () => actions.onSettingsSet({ asr_model: asrSelect.value }));
 
   const timeoutSelect = select(
@@ -359,7 +581,7 @@ function settingsPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTML
     TIMEOUT_OPTIONS,
     String(caps.auto_approve_timeout_s ?? 0),
   );
-  timeoutSelect.disabled = !connected;
+  ctx.refs.timeoutSelect = timeoutSelect; // disabled owned by applyStatus
   timeoutSelect.addEventListener("change", () =>
     actions.onSettingsSet({ auto_approve_timeout_s: Number(timeoutSelect.value) }));
 
@@ -438,15 +660,18 @@ function input(type: string, name: string, value: string, placeholder: string): 
  * Password field with a show/hide toggle: a pasted token is otherwise
  * invisible and unverifiable. Returns the flex row (for the label) plus the
  * input (for the submit handlers) — the row keeps input + button together.
+ * `revealed` starts the field in the carried Show state across a rebuild.
  */
 function passwordInput(
   name: string,
   value: string,
   placeholder: string,
+  revealed = false,
 ): { row: HTMLElement; input: HTMLInputElement } {
   const field = input("password", name, value, placeholder);
-  const toggle = button("button", "Show"); // type="button": must not submit
-  toggle.ariaLabel = "Show token";
+  const toggle = button("button", revealed ? "Hide" : "Show"); // type="button": must not submit
+  toggle.ariaLabel = revealed ? "Hide token" : "Show token";
+  if (revealed) field.type = "text";
   toggle.addEventListener("click", () => {
     const reveal = field.type === "password";
     field.type = reveal ? "text" : "password";

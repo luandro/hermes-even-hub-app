@@ -48,6 +48,16 @@ class FakeElement {
   }
   setAttribute() {}
   select() {}
+  focus(_options?: { preventScroll?: boolean }) {
+    const doc = (globalThis as any).document;
+    if (doc) doc.activeElement = this;
+  }
+  selectionStart: number | null = null;
+  selectionEnd: number | null = null;
+  setSelectionRange(start: number, end: number) {
+    this.selectionStart = start;
+    this.selectionEnd = end;
+  }
 }
 
 function collectTextAndPlaceholders(el: FakeElement): { texts: string[]; placeholders: string[] } {
@@ -556,5 +566,203 @@ describe("phone herdr panel", () => {
     expect(collectTextAndPlaceholders(noProfile.root).texts.join(" ")).toContain(
       "Save the bridge connection first.",
     );
+  });
+});
+
+describe("phone re-render stability", () => {
+  const origDoc = (globalThis as any).document;
+
+  beforeEach(() => {
+    (globalThis as any).document = {
+      createElement: (tag: string) => new FakeElement(tag),
+      activeElement: null,
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as any).document = origDoc;
+    vi.unstubAllGlobals();
+  });
+
+  const herdrProfile = {
+    url: "wss://g2-bridge.taile61e1.ts.net",
+    token: "bridge-tok",
+    herdr: { url: "wss://g2-bridge.taile61e1.ts.net/herdr", token: "relay-tok" },
+    updatedAt: 1,
+  };
+
+  function actions() {
+    return {
+      onSaveConnect: () => {},
+      onDisconnect: () => {},
+      onRefreshSessions: () => {},
+      onSwitchSession: () => {},
+      onSettingsSet: () => {},
+      onSaveDevice: () => {},
+      onSaveHerdr: () => {},
+    };
+  }
+
+  function render(root: FakeElement, overrides: Record<string, unknown>) {
+    renderPhoneSetup(
+      root as unknown as HTMLElement,
+      { ...baseState, ...overrides },
+      actions(),
+    );
+  }
+
+  function fieldByName(scope: FakeElement, name: string): FakeElement | undefined {
+    return findAll(scope, "input").find((i) => i.name === name);
+  }
+
+  const freshSessions: SessionItem[] = [
+    { id: "g2-9", title: "Fresh frame", updated: 9, platform: "even_g2" },
+  ];
+
+  it("does not rebuild on a herdr status flip — nodes and typed drafts survive", () => {
+    const root = new FakeElement("div");
+    render(root, { profile: herdrProfile, herdrStatus: "connecting" });
+    const shell = root.children[0];
+    const url = fieldByName(root, "herdr_url")!;
+    url.value = "wss://edited-mid-flip/herdr"; // typed while the dot flips
+
+    render(root, { profile: herdrProfile, herdrStatus: "auth-rejected" });
+
+    expect(root.children[0]).toBe(shell);
+    expect(fieldByName(root, "herdr_url")).toBe(url);
+    expect(url.value).toBe("wss://edited-mid-flip/herdr");
+    const dot = findAll(root, "p").find((p) => p.textContent.startsWith("◇ herdr"))!;
+    expect(dot.textContent).toBe("◇ herdr token rejected or relay unreachable");
+    expect(dot.className).toContain("is-error");
+  });
+
+  it("does not rebuild on a bridge status flip and re-enables the live controls", () => {
+    const caps = {
+      profile: "alpha",
+      net_mode: "both",
+      asr_active: "whisper-tiny",
+      asr_models: ["whisper-tiny", "parakeet-tdt-0.6b-v2"],
+      asr_env_pinned: false,
+      auto_approve_timeout_s: 0,
+    };
+    const root = new FakeElement("div");
+    const connected = {
+      ...baseState,
+      profile: herdrProfile,
+      status: "connecting",
+      sessions: freshSessions,
+      activeSession: "g2-9",
+      sessionsLoaded: true,
+      caps,
+    };
+    render(root, connected);
+    const shell = root.children[0];
+    const refresh = findButtonByText(root, "Refresh")!;
+    const asr = findAll(root, "select").find((s) => s.name === "asr_model")!;
+    const timeout = findAll(root, "select").find((s) => s.name === "auto_approve_timeout_s")!;
+    expect(refresh.disabled).toBe(true);
+    expect(asr.disabled).toBe(true);
+    expect(timeout.disabled).toBe(true);
+
+    render(root, { ...connected, status: "connected" });
+
+    expect(root.children[0]).toBe(shell);
+    expect(refresh.disabled).toBe(false);
+    expect(asr.disabled).toBe(false);
+    expect(timeout.disabled).toBe(false);
+    const status = findAll(root, "p").find((p) => p.className.includes("setup-status"))!;
+    expect(status.textContent).toBe("Connected");
+  });
+
+  it("restores typed drafts across a structural rebuild, saved-profile errors intact", () => {
+    const badSaved = {
+      ...herdrProfile,
+      herdr: { url: "https://g2-bridge.taile61e1.ts.net/herdr", token: "relay-tok" },
+    };
+    const root = new FakeElement("div");
+    render(root, { profile: badSaved, herdrStatus: "connecting" });
+    const typedUrl = fieldByName(root, "herdr_url")!;
+    fieldByName(root, "herdr_url")!.value = "wss://draft.example/herdr";
+    fieldByName(root, "herdr_token")!.value = "draft-tok";
+
+    render(root, { profile: badSaved, herdrStatus: "connecting", sessions: freshSessions });
+
+    const url = fieldByName(root, "herdr_url")!;
+    const token = fieldByName(root, "herdr_token")!;
+    expect(url).not.toBe(typedUrl); // it IS a full rebuild
+    expect(url.value).toBe("wss://draft.example/herdr");
+    expect(token.value).toBe("draft-tok");
+    expect(url.value).toBe("wss://draft.example/herdr");
+    expect(token.value).toBe("draft-tok");
+    expect(collectTextAndPlaceholders(root).texts.join(" ")).toContain(
+      "Relay URL must start with wss:// or ws://. Herdr stays off until fixed.",
+    );
+  });
+
+  it("drops a draft for a field whose saved value changed (save flow)", () => {
+    const root = new FakeElement("div");
+    render(root, { profile: herdrProfile });
+    fieldByName(root, "herdr_url")!.value = "wss://draft.example/herdr"; // typed, unsaved
+
+    const saved = {
+      ...herdrProfile,
+      herdr: { url: "wss://saved.example/herdr", token: "relay-tok" },
+      updatedAt: 2,
+    };
+    render(root, { profile: saved });
+
+    expect(fieldByName(root, "herdr_url")!.value).toBe("wss://saved.example/herdr");
+  });
+
+  it("restores focus and selection to the same-named input after a rebuild", () => {
+    const root = new FakeElement("div");
+    render(root, { profile: herdrProfile, herdrStatus: "connecting" });
+    const token = fieldByName(root, "herdr_token")!;
+    token.focus();
+    token.setSelectionRange(2, 4);
+
+    render(root, { profile: herdrProfile, herdrStatus: "connecting", sessions: freshSessions });
+
+    const next = fieldByName(root, "herdr_token")!;
+    expect(next).not.toBe(token);
+    expect((globalThis as any).document.activeElement).toBe(next);
+    expect(next.selectionStart).toBe(2);
+    expect(next.selectionEnd).toBe(4);
+  });
+
+  it("keeps the token Show state across a rebuild", () => {
+    const root = new FakeElement("div");
+    render(root, { profile: herdrProfile });
+    const herdrForm = () => findAll(root, "form")[1];
+    const eye = findAll(herdrForm(), "button").find((b) => b.textContent === "Show")!;
+    eye.fire("click");
+    expect(fieldByName(herdrForm(), "herdr_token")!.type).toBe("text");
+
+    render(root, { profile: herdrProfile, sessions: freshSessions });
+
+    const token = fieldByName(herdrForm(), "herdr_token")!;
+    const nextEye = findAll(herdrForm(), "button").find((b) => b.textContent === "Hide")!;
+    expect(token.type).toBe("text");
+    expect(nextEye).toBeTruthy();
+    nextEye.fire("click"); // the carried toggle still works
+    expect(token.type).toBe("password");
+  });
+
+  it("shows an inline relay status line near Save relay, patched in place, absent when off", () => {
+    const root = new FakeElement("div");
+    render(root, { profile: herdrProfile, herdrStatus: "connecting" });
+    const inline = () => findAll(root, "p").find((p) => p.textContent.startsWith("Relay:"))!;
+    expect(inline().textContent).toBe("Relay: connecting");
+    const node = inline();
+
+    render(root, { profile: herdrProfile, herdrStatus: "auth-rejected" });
+
+    expect(inline()).toBe(node);
+    expect(node.textContent).toBe("Relay: token rejected or relay unreachable");
+    expect(node.className).toContain("is-error");
+
+    const off = new FakeElement("div"); // null vs non-null is structural — fresh root
+    render(off, { profile: herdrProfile });
+    expect(findAll(off, "p").some((p) => p.textContent.startsWith("Relay:"))).toBe(false);
   });
 });

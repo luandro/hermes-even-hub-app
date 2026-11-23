@@ -17,6 +17,7 @@ class FakeElement {
   autocapitalize = "";
   spellcheck = false;
   inputMode = "";
+  ariaLabel = "";
   disabled = false;
   hidden = false;
   open = false;
@@ -508,6 +509,32 @@ describe("phone herdr panel", () => {
     expect(texts).not.toContain("Relay URL must start with");
     expect(texts).not.toContain("Relay token is required");
     expect(texts).toContain("Leave both empty to keep Herdr off.");
+  });
+
+  it("gives both token fields an eye toggle that flips type and aria-label without being a submit", () => {
+    const { root } = render();
+
+    const herdrForm = findAll(root, "form")[1];
+    const herdrToken = findAll(herdrForm, "input").find((i) => i.name === "herdr_token")!;
+    const herdrEye = findAll(herdrForm, "button").find((b) => b.textContent === "eye")!;
+    expect(herdrToken.type).toBe("password");
+    expect(herdrEye).toBeTruthy();
+    expect(herdrEye.type).toBe("button"); // must not submit the relay form
+    expect(herdrEye.ariaLabel).toBe("Show token");
+
+    herdrEye.fire("click");
+    expect(herdrToken.type).toBe("text");
+    expect(herdrEye.ariaLabel).toBe("Hide token");
+
+    herdrEye.fire("click");
+    expect(herdrToken.type).toBe("password");
+    expect(herdrEye.ariaLabel).toBe("Show token");
+
+    // The bridge token field (form 0) gets the same treatment.
+    const bridgeForm = findAll(root, "form")[0];
+    const bridgeToken = findAll(bridgeForm, "input").find((i) => i.name === "token")!;
+    expect(bridgeToken.type).toBe("password");
+    expect(findAll(bridgeForm, "button").some((b) => b.textContent === "eye")).toBe(true);
   });
 
   it("disables Save relay until a bridge profile exists", () => {

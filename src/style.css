@@ -468,3 +468,28 @@ select:disabled {
   font-weight: 700;
   overflow-wrap: anywhere;
 }
+
+/* Token field + eye toggle (bridge and herdr forms on the phone setup). */
+.token-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.token-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.token-row button {
+  flex: none;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid #b8c3d2;
+  border-radius: 7px;
+  background: #f1f4f8;
+  color: #38465a;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}

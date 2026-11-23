@@ -231,6 +231,76 @@ describe("HerdrClient: failure behavior (silent degradation)", () => {
   });
 });
 
+describe("HerdrClient: auth-rejected (HTTP-401-at-upgrade heuristic)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("reports auth-rejected after 3 failed opens with zero successful opens, then stops retrying", () => {
+    vi.useFakeTimers();
+    const statuses: string[] = [];
+    const c = new HerdrClient({ WS: FakeWS as any, onStatus: (s) => statuses.push(s), onTerminals: () => {} });
+    c.connect(profile);
+
+    // Attempt 1: relay answers the upgrade with 401 → onerror+onclose, never onopen.
+    FakeWS.last!.onerror!();
+    vi.advanceTimersByTime(500); // attempt 2 (delay doubled to 1000 after strike 1)
+    FakeWS.last!.onerror!();
+    vi.advanceTimersByTime(1000); // attempt 3
+    FakeWS.last!.onerror!();
+
+    expect(statuses).toEqual([
+      "connecting", "reconnecting",
+      "connecting", "reconnecting",
+      "connecting", "auth-rejected",
+    ]);
+    // Terminal: no reconnect storm past the verdict.
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWS.opened).toHaveLength(3);
+    expect(statuses.filter((s) => s === "auth-rejected")).toHaveLength(1);
+  });
+
+  it("a successful open after failed opens resets the strike count and reconnects normally", async () => {
+    vi.useFakeTimers();
+    const statuses: string[] = [];
+    const c = new HerdrClient({ WS: FakeWS as any, onStatus: (s) => statuses.push(s), onTerminals: () => {} });
+    c.connect(profile);
+    FakeWS.last!.onerror!(); // strike 1
+    vi.advanceTimersByTime(500);
+    FakeWS.last!.onerror!(); // strike 2
+    vi.advanceTimersByTime(1000);
+    // Attempt 3 succeeds: relay reachable again, hello ok.
+    FakeWS.last!.onopen!();
+    await flush();
+    FakeWS.last!.replyTo(0, { ok: true });
+    await flush();
+    expect(statuses).toContain("connected");
+
+    // A LATER drop is a plain reconnect — never auth-rejected.
+    FakeWS.last!.close(1006);
+    vi.advanceTimersByTime(500);
+    FakeWS.last!.onopen!();
+    expect(statuses).not.toContain("auth-rejected");
+    expect(FakeWS.opened.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("auth-rejected is terminal: a stray later close schedules no reconnect and emits nothing", () => {
+    vi.useFakeTimers();
+    const statuses: string[] = [];
+    const c = new HerdrClient({ WS: FakeWS as any, onStatus: (s) => statuses.push(s), onTerminals: () => {} });
+    c.connect(profile);
+    for (let i = 0; i < 3; i++) {
+      FakeWS.last!.onerror!();
+      vi.advanceTimersByTime(8000);
+    }
+    expect(statuses.filter((s) => s === "auth-rejected")).toHaveLength(1);
+
+    const count = statuses.length;
+    FakeWS.last!.close(1006); // delayed/stray close event after the verdict
+    vi.advanceTimersByTime(60_000);
+    expect(statuses).toHaveLength(count);
+    expect(FakeWS.opened).toHaveLength(3);
+  });
+});
+
 describe("HerdrClient lifecycle hooks", () => {
   afterEach(() => vi.useRealTimers());
 

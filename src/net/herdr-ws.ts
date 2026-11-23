@@ -38,6 +38,10 @@ export class HerdrClient {
   private alive = false;
   private delay = 500;
   private nextId = 1;
+  /** True once ANY socket on this endpoint reached onopen (reset per connect). */
+  private everConnected = false;
+  /** Consecutive closed-without-ever-opening strikes (reset by any open). */
+  private failedOpens = 0;
   private readonly pending = new Map<number, (reply: Reply) => void>();
   private pollTimer?: ReturnType<typeof setInterval>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -56,6 +60,8 @@ export class HerdrClient {
     this.endpoint = endpoint;
     this.alive = true;
     this.delay = 500;
+    this.everConnected = false;
+    this.failedOpens = 0;
     this.open();
   }
 
@@ -102,6 +108,8 @@ export class HerdrClient {
     this.ws = ws as unknown as WebSocket;
 
     (ws as unknown as { onopen: () => void }).onopen = () => {
+      this.everConnected = true;
+      this.failedOpens = 0;
       this.delay = 500;
       this.d.onStatus?.("connected");
       void this.request("hello", {}).then((reply) => {
@@ -129,6 +137,22 @@ export class HerdrClient {
       this.pending.clear();
       if (this.ws === ws) this.ws = undefined;
       if (!this.alive) return;
+      // HEURISTIC — the WS API hides the HTTP status of a failed upgrade, so a
+      // relay answering 401 (bad token) at the handshake is indistinguishable
+      // from a network failure here: both fire onerror+onclose with no onopen.
+      // Practical rule: count consecutive closes with ZERO successful opens on
+      // this endpoint; 3 strikes → auth-rejected, terminal (same semantics as
+      // the "rejected" path above — no reconnect storm against a rejecting
+      // relay). Any successful open resets the count, so a plain outage that
+      // later recovers never trips it.
+      if (!this.everConnected) {
+        this.failedOpens++;
+        if (this.failedOpens >= 3) {
+          this.alive = false;
+          this.d.onStatus?.("auth-rejected");
+          return;
+        }
+      }
       // Silent degradation: rows are dropped by the state layer, no notices.
       this.d.onStatus?.("reconnecting");
       this.reconnectTimer = setTimeout(() => this.open(), this.delay);

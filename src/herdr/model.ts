@@ -74,8 +74,18 @@ export interface HerdrEndpoint {
   token: string;
 }
 
-/** Status of the Herdr leg. "off" = feature not configured (pre-Phase-2). */
-export type HerdrConnStatus = "off" | "connecting" | "connected" | "reconnecting" | "rejected";
+/**
+ * Status of the Herdr leg. "off" = feature not configured (pre-Phase-2).
+ * "auth-rejected" = the upgrade kept failing before ANY successful open
+ * (3-strike heuristic in herdr-ws — a browser WS hides the HTTP status).
+ */
+export type HerdrConnStatus =
+  | "off"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "rejected"
+  | "auth-rejected";
 
 /** The open read-only Herdr detail screen (`screen === "herdr-session"`). */
 export interface HerdrDetail {

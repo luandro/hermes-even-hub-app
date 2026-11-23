@@ -77,7 +77,7 @@ export function renderPhoneSetup(
   const panel = el("section", "setup-panel");
   const form = el("form", "setup-form");
   const url = input("url", "url", state.profile?.url || state.defaults.url, "wss://g2-bridge.taile61e1.ts.net");
-  const token = input("password", "token", state.profile?.token || state.defaults.token, "Shared bridge token");
+  const token = passwordInput("token", state.profile?.token || state.defaults.token, "Shared bridge token");
   const header = el("header", "setup-header");
   const status = el("p", `setup-status ${statusClass(state.status)}`, statusText(state.status));
   const title = el("h1", "", "Hermes");
@@ -102,10 +102,10 @@ export function renderPhoneSetup(
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    actions.onSaveConnect(url.value, token.value);
+    actions.onSaveConnect(url.value, token.input.value);
   });
 
-  form.append(label("Bridge URL", url), label("Token", token), actionsRow);
+  form.append(label("Bridge URL", url), label("Token", token.row), actionsRow);
   panel.append(
     header,
     updated,
@@ -138,8 +138,7 @@ function herdrPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLEle
     state.profile?.herdr?.url || state.herdrDefaults?.url || "",
     "wss://g2-bridge.taile61e1.ts.net/herdr",
   );
-  const token = input(
-    "password",
+  const token = passwordInput(
     "herdr_token",
     state.profile?.herdr?.token || state.herdrDefaults?.token || "",
     "HERDR_RELAY_TOKEN",
@@ -147,7 +146,7 @@ function herdrPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLEle
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    actions.onSaveHerdr(url.value, token.value);
+    actions.onSaveHerdr(url.value, token.input.value);
   });
 
   const error = herdrSectionError(state.profile?.herdr);
@@ -158,7 +157,7 @@ function herdrPanel(state: PhoneSetupState, actions: PhoneSetupActions): HTMLEle
 
   form.append(
     label("Relay URL", url),
-    label("Relay token", token),
+    label("Relay token", token.row),
     errorList(error ? [error] : []),
     ...notes,
     save,
@@ -435,6 +434,28 @@ function input(type: string, name: string, value: string, placeholder: string): 
   return element;
 }
 
+/**
+ * Password field with an eye toggle: a pasted token is otherwise invisible
+ * and unverifiable. Returns the flex row (for the label) plus the input
+ * (for the submit handlers) — the row keeps input + button together.
+ */
+function passwordInput(
+  name: string,
+  value: string,
+  placeholder: string,
+): { row: HTMLElement; input: HTMLInputElement } {
+  const field = input("password", name, value, placeholder);
+  const toggle = button("button", "eye"); // type="button": must not submit
+  toggle.ariaLabel = "Show token";
+  toggle.addEventListener("click", () => {
+    const reveal = field.type === "password";
+    field.type = reveal ? "text" : "password";
+    toggle.ariaLabel = reveal ? "Hide token" : "Show token";
+  });
+  const row = el("div", "token-row", "", [field, toggle]);
+  return { row, input: field };
+}
+
 function select(
   name: string,
   options: { label: string; value: string }[],
@@ -505,6 +526,6 @@ function statusClass(status: string): string {
 
 /** Herdr relay status reuses the bridge status classes (same semantics). */
 function herdrStatusClass(status: string): string {
-  if (status === "rejected") return "is-error";
+  if (status === "rejected" || status === "auth-rejected") return "is-error";
   return statusClass(status);
 }

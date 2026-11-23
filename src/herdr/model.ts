@@ -77,7 +77,8 @@ export interface HerdrEndpoint {
 /**
  * Status of the Herdr leg. "off" = feature not configured (pre-Phase-2).
  * "auth-rejected" = the upgrade kept failing before ANY successful open
- * (3-strike heuristic in herdr-ws — a browser WS hides the HTTP status).
+ * (3-strike heuristic in herdr-ws — a browser WS hides the HTTP status;
+ * reported, then retried slowly: it may just be an unreachable relay).
  */
 export type HerdrConnStatus =
   | "off"

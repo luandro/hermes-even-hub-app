@@ -511,12 +511,12 @@ describe("phone herdr panel", () => {
     expect(texts).toContain("Leave both empty to keep Herdr off.");
   });
 
-  it("gives both token fields an eye toggle that flips type and aria-label without being a submit", () => {
+  it("gives both token fields a Show/Hide toggle that flips type, text and aria-label without being a submit", () => {
     const { root } = render();
 
     const herdrForm = findAll(root, "form")[1];
     const herdrToken = findAll(herdrForm, "input").find((i) => i.name === "herdr_token")!;
-    const herdrEye = findAll(herdrForm, "button").find((b) => b.textContent === "eye")!;
+    const herdrEye = findAll(herdrForm, "button").find((b) => b.textContent === "Show")!;
     expect(herdrToken.type).toBe("password");
     expect(herdrEye).toBeTruthy();
     expect(herdrEye.type).toBe("button"); // must not submit the relay form
@@ -524,17 +524,29 @@ describe("phone herdr panel", () => {
 
     herdrEye.fire("click");
     expect(herdrToken.type).toBe("text");
+    expect(herdrEye.textContent).toBe("Hide"); // visible text matches the aria-label
     expect(herdrEye.ariaLabel).toBe("Hide token");
 
     herdrEye.fire("click");
     expect(herdrToken.type).toBe("password");
+    expect(herdrEye.textContent).toBe("Show");
     expect(herdrEye.ariaLabel).toBe("Show token");
 
     // The bridge token field (form 0) gets the same treatment.
     const bridgeForm = findAll(root, "form")[0];
     const bridgeToken = findAll(bridgeForm, "input").find((i) => i.name === "token")!;
     expect(bridgeToken.type).toBe("password");
-    expect(findAll(bridgeForm, "button").some((b) => b.textContent === "eye")).toBe(true);
+    expect(findAll(bridgeForm, "button").some((b) => b.textContent === "Show")).toBe(true);
+  });
+
+  it("renders the auth-rejected verdict with an honest label, never the raw heuristic string", () => {
+    const { root } = render({ herdrStatus: "auth-rejected" });
+    const dot = findAll(root, "p").find((p) => p.className.includes("setup-status-herdr"))!;
+    expect(dot).toBeTruthy();
+    // The 3-strike heuristic cannot tell a bad token from an unreachable relay.
+    expect(dot.textContent).toContain("token rejected or relay unreachable");
+    expect(dot.textContent).not.toContain("auth-rejected");
+    expect(dot.className).toContain("is-error");
   });
 
   it("disables Save relay until a bridge profile exists", () => {

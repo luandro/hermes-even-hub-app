@@ -234,7 +234,7 @@ describe("HerdrClient: failure behavior (silent degradation)", () => {
 describe("HerdrClient: auth-rejected (HTTP-401-at-upgrade heuristic)", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("reports auth-rejected after 3 failed opens with zero successful opens, then stops retrying", () => {
+  it("reports auth-rejected after 3 failed opens with zero successful opens, then retries slowly", () => {
     vi.useFakeTimers();
     const statuses: string[] = [];
     const c = new HerdrClient({ WS: FakeWS as any, onStatus: (s) => statuses.push(s), onTerminals: () => {} });
@@ -252,10 +252,14 @@ describe("HerdrClient: auth-rejected (HTTP-401-at-upgrade heuristic)", () => {
       "connecting", "reconnecting",
       "connecting", "auth-rejected",
     ]);
-    // Terminal: no reconnect storm past the verdict.
-    vi.advanceTimersByTime(60_000);
-    expect(FakeWS.opened).toHaveLength(3);
+    // The verdict is a report, NOT a terminal state: one open() per slow
+    // cadence (SLOW_RETRY_MS = 30s) — no storm, no silence either.
+    vi.advanceTimersByTime(29_999);
+    expect(FakeWS.opened).toHaveLength(3); // not before the slow delay
     expect(statuses.filter((s) => s === "auth-rejected")).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeWS.opened).toHaveLength(4);
+    expect(statuses[statuses.length - 1]).toBe("connecting");
   });
 
   it("a successful open after failed opens resets the strike count and reconnects normally", async () => {
@@ -282,22 +286,108 @@ describe("HerdrClient: auth-rejected (HTTP-401-at-upgrade heuristic)", () => {
     expect(FakeWS.opened.length).toBeGreaterThanOrEqual(4);
   });
 
-  it("auth-rejected is terminal: a stray later close schedules no reconnect and emits nothing", () => {
+  /** 3 strikes at the real fast-backoff pace (500 → 1000), leaving a FRESH
+   *  30s slow timer after the verdict — no clock pre-burned. */
+  const strikeOut = (c: HerdrClient): void => {
+    c.connect(profile);
+    FakeWS.last!.onerror!(); // strike 1
+    vi.advanceTimersByTime(500); // → attempt 2
+    FakeWS.last!.onerror!(); // strike 2
+    vi.advanceTimersByTime(1000); // → attempt 3
+    FakeWS.last!.onerror!(); // strike 3 → verdict + slow timer @30s
+  };
+
+  it("a stray late close after the verdict is ignored — no second verdict, no fast retry, slow cadence intact", () => {
     vi.useFakeTimers();
     const statuses: string[] = [];
     const c = new HerdrClient({ WS: FakeWS as any, onStatus: (s) => statuses.push(s), onTerminals: () => {} });
-    c.connect(profile);
-    for (let i = 0; i < 3; i++) {
-      FakeWS.last!.onerror!();
-      vi.advanceTimersByTime(8000);
-    }
+    strikeOut(c);
     expect(statuses.filter((s) => s === "auth-rejected")).toHaveLength(1);
 
     const count = statuses.length;
     FakeWS.last!.close(1006); // delayed/stray close event after the verdict
-    vi.advanceTimersByTime(60_000);
-    expect(statuses).toHaveLength(count);
+    vi.advanceTimersByTime(29_999);
+    expect(statuses).toHaveLength(count); // emitted nothing, preempted nothing
     expect(FakeWS.opened).toHaveLength(3);
+    vi.advanceTimersByTime(1);
+    expect(FakeWS.opened).toHaveLength(4); // the one scheduled slow retry still fires
+  });
+
+  it("recovery: connect() after the verdict resets the strikes — 3 NEW failures needed, not 1", () => {
+    vi.useFakeTimers();
+    const statuses: string[] = [];
+    const c = new HerdrClient({ WS: FakeWS as any, onStatus: (s) => statuses.push(s), onTerminals: () => {} });
+    strikeOut(c);
+    expect(statuses.filter((s) => s === "auth-rejected")).toHaveLength(1);
+
+    // Save relay with a corrected token → connect(): the verdict must not
+    // re-fire on the FIRST failure of the new attempt sequence.
+    c.connect({ url: profile.url, token: "fixed-tok" });
+    FakeWS.last!.onerror!(); // new strike 1 of 3
+    expect(statuses.filter((s) => s === "auth-rejected")).toHaveLength(1);
+    expect(statuses[statuses.length - 1]).toBe("reconnecting");
+  });
+
+  it("after the verdict, failed slow attempts keep the slow cadence indefinitely", () => {
+    vi.useFakeTimers();
+    const statuses: string[] = [];
+    const c = new HerdrClient({ WS: FakeWS as any, onStatus: (s) => statuses.push(s), onTerminals: () => {} });
+    strikeOut(c);
+    expect(FakeWS.opened).toHaveLength(3);
+
+    // Slow attempt fails too → verdict re-reported, ANOTHER slow retry scheduled.
+    vi.advanceTimersByTime(30_000);
+    FakeWS.last!.onerror!();
+    expect(statuses.filter((s) => s === "auth-rejected")).toHaveLength(2);
+    // And the cadence holds: exactly one more open per slow period.
+    vi.advanceTimersByTime(30_000);
+    expect(FakeWS.opened).toHaveLength(5);
+    expect(statuses.filter((s) => s === "auth-rejected")).toHaveLength(2);
+  });
+});
+
+describe("HerdrClient: stale close from a superseded socket", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("adds no strike and opens no extra socket when it lands before the new socket opens", () => {
+    vi.useFakeTimers();
+    const statuses: string[] = [];
+    const c = new HerdrClient({ WS: FakeWS as any, onStatus: (s) => statuses.push(s), onTerminals: () => {} });
+    c.connect(profile);
+    const stale = FakeWS.last!;
+    // Save relay with a corrected token while the old socket is still mid-handshake.
+    c.connect({ url: profile.url, token: "fixed-tok" });
+    const fresh = FakeWS.last!;
+    expect(FakeWS.opened).toHaveLength(2);
+
+    stale.onclose!({ code: 1006 }); // the old socket's close arrives AFTER the new connect()
+    expect(statuses).toEqual(["connecting", "connecting"]); // no "reconnecting", no verdict
+    vi.advanceTimersByTime(8000);
+    expect(FakeWS.opened).toHaveLength(2); // no orphaned extra open scheduled
+
+    // Two REAL failures on the fresh endpoint stay below the verdict — proof
+    // the stale close did not count as strike 1 of 3.
+    fresh.onerror!();
+    vi.advanceTimersByTime(500);
+    FakeWS.last!.onerror!();
+    expect(statuses).not.toContain("auth-rejected");
+  });
+
+  it("wipes no pending requests: a hello in flight on the new socket still resolves", async () => {
+    vi.useFakeTimers();
+    const c = new HerdrClient({ WS: FakeWS as any, onTerminals: () => {} });
+    c.connect(profile);
+    const stale = FakeWS.last!;
+    c.connect({ url: profile.url, token: "fixed-tok" });
+    const fresh = FakeWS.last!;
+    fresh.onopen!();
+    await flush(); // hello sent, its reply pending
+
+    stale.onclose!({ code: 1006 }); // must NOT clear the new socket's pending map
+
+    fresh.replyTo(0, { ok: true });
+    await flush();
+    expect(fresh.sent.some((s) => String(s).includes("herdr.list"))).toBe(true);
   });
 });
 

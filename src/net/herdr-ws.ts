@@ -15,6 +15,11 @@ import type { HerdrConnStatus, HerdrEndpoint } from "../herdr/model";
 
 export const HERDR_LIST_POLL_MS = 15_000;
 export const HERDR_READ_LINES = 50;
+/**
+ * Post-verdict retry cadence (ms). Slow enough that a bad token produces no
+ * reconnect storm; fast enough that a mere outage heals without user action.
+ */
+export const SLOW_RETRY_MS = 30_000;
 
 interface HerdrDeps {
   WS?: typeof WebSocket;
@@ -38,7 +43,10 @@ export class HerdrClient {
   private alive = false;
   private delay = 500;
   private nextId = 1;
-  /** True once ANY socket on this endpoint reached onopen (reset per connect). */
+  /** True once ANY socket on this endpoint reached onopen (reset per connect).
+   *  Consequence: a mid-session token rotation never trips the strike counter —
+   *  it degrades to plain `reconnecting` until the next connect(). Accepted:
+   *  rotations are rare, and the rows-drop already signals the leg is down. */
   private everConnected = false;
   /** Consecutive closed-without-ever-opening strikes (reset by any open). */
   private failedOpens = 0;
@@ -133,23 +141,31 @@ export class HerdrClient {
     };
 
     (ws as unknown as { onclose: () => void }).onclose = () => {
+      // A close from a SUPERSEDED socket (connect() already replaced it via
+      // stop()) must not count as a strike, wipe the new socket's pending
+      // requests, or schedule an extra open against the new endpoint.
+      if (this.ws !== ws) return;
       this.clearTimers();
       this.pending.clear();
-      if (this.ws === ws) this.ws = undefined;
+      this.ws = undefined;
       if (!this.alive) return;
       // HEURISTIC — the WS API hides the HTTP status of a failed upgrade, so a
       // relay answering 401 (bad token) at the handshake is indistinguishable
       // from a network failure here: both fire onerror+onclose with no onopen.
       // Practical rule: count consecutive closes with ZERO successful opens on
-      // this endpoint; 3 strikes → auth-rejected, terminal (same semantics as
-      // the "rejected" path above — no reconnect storm against a rejecting
-      // relay). Any successful open resets the count, so a plain outage that
-      // later recovers never trips it.
+      // this endpoint; 3 strikes → report "auth-rejected". Any successful open
+      // resets the count, so a plain outage that later recovers never trips it.
       if (!this.everConnected) {
         this.failedOpens++;
         if (this.failedOpens >= 3) {
-          this.alive = false;
+          // The verdict is a REPORT, not a terminal state. The WS API hides
+          // the HTTP status, so 3 fast failures mean "bad token" OR "relay
+          // unreachable" (e.g. Tailscale still coming up at cold start) — we
+          // cannot tell. Keep retrying on the slow cadence forever: a bad
+          // token costs one attempt per SLOW_RETRY_MS (no storm), and an
+          // outage heals by itself without user action.
           this.d.onStatus?.("auth-rejected");
+          this.reconnectTimer = setTimeout(() => this.open(), SLOW_RETRY_MS);
           return;
         }
       }

@@ -95,7 +95,7 @@ export function renderPhoneSetup(
   // Tiny herdr relay state dot — only when the leg is configured at all.
   if (state.herdrStatus) {
     statusColumn.append(
-      el("p", `setup-status setup-status-herdr ${herdrStatusClass(state.herdrStatus)}`, `◇ herdr ${state.herdrStatus}`),
+      el("p", `setup-status setup-status-herdr ${herdrStatusClass(state.herdrStatus)}`, `◇ herdr ${herdrStatusText(state.herdrStatus)}`),
     );
   }
   header.append(el("div", "setup-title", "", [title, intro]), statusColumn);
@@ -435,9 +435,9 @@ function input(type: string, name: string, value: string, placeholder: string): 
 }
 
 /**
- * Password field with an eye toggle: a pasted token is otherwise invisible
- * and unverifiable. Returns the flex row (for the label) plus the input
- * (for the submit handlers) — the row keeps input + button together.
+ * Password field with a show/hide toggle: a pasted token is otherwise
+ * invisible and unverifiable. Returns the flex row (for the label) plus the
+ * input (for the submit handlers) — the row keeps input + button together.
  */
 function passwordInput(
   name: string,
@@ -445,11 +445,12 @@ function passwordInput(
   placeholder: string,
 ): { row: HTMLElement; input: HTMLInputElement } {
   const field = input("password", name, value, placeholder);
-  const toggle = button("button", "eye"); // type="button": must not submit
+  const toggle = button("button", "Show"); // type="button": must not submit
   toggle.ariaLabel = "Show token";
   toggle.addEventListener("click", () => {
     const reveal = field.type === "password";
     field.type = reveal ? "text" : "password";
+    toggle.textContent = reveal ? "Hide" : "Show"; // visible text matches the aria-label
     toggle.ariaLabel = reveal ? "Hide token" : "Show token";
   });
   const row = el("div", "token-row", "", [field, toggle]);
@@ -522,6 +523,17 @@ function statusClass(status: string): string {
   if (status.startsWith("error:")) return "is-error";
   if (status === "not configured" || status === "disconnected") return "is-muted";
   return "is-pending";
+}
+
+/**
+ * Human text for the relay status dot. "auth-rejected" comes from a 3-strike
+ * heuristic that cannot distinguish a bad token from an unreachable relay (a
+ * browser WS hides the failed upgrade's HTTP status) — the label says both
+ * instead of claiming a verdict it doesn't have.
+ */
+function herdrStatusText(status: string): string {
+  if (status === "auth-rejected") return "token rejected or relay unreachable";
+  return status;
 }
 
 /** Herdr relay status reuses the bridge status classes (same semantics). */
